@@ -1,0 +1,29 @@
+services:
+  serve:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/book
+
+  build-site:
+    build: .
+    command: mkdocs build
+    volumes:
+      - .:/book
+
+  build-pdf:
+    build: .
+    command: mkdocs build
+    environment:
+      - MKDOCS_PDF=true
+    volumes:
+      - .:/book
+
+  build-epub:
+    build: .
+    command: mkdocs build
+    environment:
+      - MKDOCS_EPUB=true
+    volumes:
+      - .:/book

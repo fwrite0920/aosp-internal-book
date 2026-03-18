@@ -1,0 +1,24 @@
+# Build output
+/site/
+/docs/
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+
+# Mermaid SVG cache (pdf-generate plugin)
+.mermaid-cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
