@@ -23,6 +23,11 @@ docker compose up -d serve         # http://localhost:8000
 
 GitHub Actions runs `mkdocs build` on push/PR (~2 min).
 
+## Commit Rules
+
+Do not add a `Co-Authored-By` trailer when creating commits. Commits should
+have a plain author and no AI/tool attribution footer.
+
 ## Skills
 
 - `.claude/skills/book-writer/SKILL.md` — chapter structure, content guidelines, Mermaid syntax

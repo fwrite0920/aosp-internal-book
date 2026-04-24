@@ -24,8 +24,9 @@ from mkdocs_mermaid_renderer import MermaidRenderer, replace_mermaid_blocks
 from .html_cleanup import (
     collect_image_refs,
     expand_tabbed_content,
+    extract_svgs,
     html_to_xhtml,
-    sanitize_svg_for_epub,
+    restore_svgs_as_images,
     strip_site_chrome,
 )
 from .toc_builder import build_spine_order, build_toc
@@ -118,10 +119,9 @@ class EpubGeneratePlugin(BasePlugin):
     # ── HTML preprocessing ──
 
     def _prepare_epub_html(self, html):
-        """Transform rendered HTML for EPUB."""
+        """Transform rendered HTML for EPUB, pre-XHTML step."""
         html = strip_site_chrome(html)
         html = replace_mermaid_blocks(html, self._cache_dir)
-        html = sanitize_svg_for_epub(html)
         html = expand_tabbed_content(html)
         return html
 
@@ -156,10 +156,27 @@ class EpubGeneratePlugin(BasePlugin):
 
         # Build chapter map: src_path -> EpubHtml
         chapter_map = {}
+        svg_file_names_added: set[str] = set()
         for src_path, title, content in self._chapter_queue:
             fname = src_path.replace(".md", ".xhtml")
-            # Convert to XHTML
-            xhtml = html_to_xhtml(content)
+            # Shield SVGs from the HTML→XHTML round-trip, then materialize
+            # each SVG as a separate EPUB manifest item and reference it
+            # from the chapter via <img>. Inline <svg> doesn't survive
+            # ebooklib's HTML-based re-parsing during write_epub (case is
+            # lost on viewBox, clipPath, etc.), and <img> is sized far
+            # more predictably by EPUB readers.
+            html_with_placeholders, svgs = extract_svgs(content)
+            xhtml = html_to_xhtml(html_with_placeholders)
+            xhtml, svg_files = restore_svgs_as_images(xhtml, svgs)
+            for svg_filename, svg_bytes in svg_files:
+                if svg_filename in svg_file_names_added:
+                    continue
+                svg_file_names_added.add(svg_filename)
+                book.add_item(epub.EpubItem(
+                    file_name=svg_filename,
+                    media_type="image/svg+xml",
+                    content=svg_bytes,
+                ))
             # Rewrite internal links
             xhtml = self._rewrite_links(xhtml)
 
