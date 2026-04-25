@@ -819,10 +819,10 @@ timer-based wakeups. Each registered callback is represented by a
 ```mermaid
 stateDiagram-v2
     [*] --> Disarmed
-    Disarmed --> Armed : schedule()
-    Armed --> Running : timer fires, executing()
+    Disarmed --> Armed : schedule
+    Armed --> Running : timer fires, executing
     Running --> Disarmed : callback completes
-    Armed --> Disarmed : cancel()
+    Armed --> Disarmed : cancel
 ```
 
 Each entry carries `ScheduleTiming` that specifies:
@@ -1050,14 +1050,14 @@ The state transitions:
 
 ```mermaid
 stateDiagram-v2
-    Late --> Early : setTransactionSchedule()
-    Late --> EarlyGpu : onDisplayRefresh(usedGpu=true)
-    Early --> Late : frames elapsed + no pending transactions
-    EarlyGpu --> Late : frames elapsed + no GPU composition
-    Early --> EarlyGpu : onDisplayRefresh(usedGpu=true)
-    EarlyGpu --> Early : setTransactionSchedule()
-    Late --> Early : onRefreshRateChangeInitiated()
-    Early --> Late : onRefreshRateChangeCompleted()
+    Late --> Early : setTransactionSchedule
+    Early --> Late : frames elapsed,<br/>no pending tx
+    Late --> EarlyGpu : onDisplayRefresh<br/>usedGpu=true
+    EarlyGpu --> Late : frames elapsed,<br/>no GPU comp
+    Early --> EarlyGpu : onDisplayRefresh<br/>usedGpu=true
+    EarlyGpu --> Early : setTransactionSchedule
+    Late --> Early : onRefreshRateChangeInitiated
+    Early --> Late : onRefreshRateChangeCompleted
 ```
 
 ### 24.3.10 VsyncSchedule: Per-Display VSYNC
@@ -2026,11 +2026,11 @@ buffer pool:
 ```mermaid
 stateDiagram-v2
     [*] --> FREE : Allocated
-    FREE --> DEQUEUED : dequeueBuffer()
-    DEQUEUED --> QUEUED : queueBuffer()
-    DEQUEUED --> FREE : cancelBuffer()
-    QUEUED --> ACQUIRED : acquireBuffer()
-    ACQUIRED --> FREE : releaseBuffer()
+    FREE --> DEQUEUED : dequeueBuffer
+    DEQUEUED --> QUEUED : queueBuffer
+    DEQUEUED --> FREE : cancelBuffer
+    QUEUED --> ACQUIRED : acquireBuffer
+    ACQUIRED --> FREE : releaseBuffer
 ```
 
 Each BufferQueue has a fixed number of slots (typically 3 for triple
@@ -2930,7 +2930,7 @@ capability, which is typically limited by thermal constraints:
 ```mermaid
 stateDiagram-v2
     [*] --> Normal
-    Normal --> HBM_SV : Sunlight detected (lux > threshold)
+    Normal --> HBM_SV : Sunlight detected, lux > threshold
     HBM_SV --> Normal : Sunlight absent or thermal limit
     Normal --> HBM_HDR : HDR content displayed
     HBM_HDR --> Normal : No HDR content

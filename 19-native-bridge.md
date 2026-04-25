@@ -206,13 +206,13 @@ The bridge progresses through a strict state machine:
 ```mermaid
 stateDiagram-v2
     [*] --> kNotSetup
-    kNotSetup --> kOpened : LoadNativeBridge()
+    kNotSetup --> kOpened : LoadNativeBridge
     kNotSetup --> kClosed : empty filename or error
-    kOpened --> kPreInitialized : PreInitializeNativeBridge()
-    kPreInitialized --> kInitialized : InitializeNativeBridge()
+    kOpened --> kPreInitialized : PreInitializeNativeBridge
+    kPreInitialized --> kInitialized : InitializeNativeBridge
     kPreInitialized --> kClosed : init failure
-    kInitialized --> kClosed : UnloadNativeBridge()
-    kOpened --> kClosed : UnloadNativeBridge()
+    kInitialized --> kClosed : UnloadNativeBridge
+    kOpened --> kClosed : UnloadNativeBridge
 ```
 
 From `native_bridge.cc` (lines 75-81):

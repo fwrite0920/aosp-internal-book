@@ -3675,82 +3675,27 @@ platform to a modular implementation.
 
 ```mermaid
 graph TB
-    subgraph "system_server Process"
-        direction TB
+    ZYG["Zygote"] -->|"fork()"| MT
+    APPS["App Processes"] -->|"Binder IPC"| BTP
 
-        subgraph "Thread Pool"
-            BT1["Binder:1000_1"]
-            BT2["Binder:1000_2"]
-            BTN["Binder:1000_31"]
-        end
+    subgraph SS["system_server process"]
+        MT["Main Thread"] --> SSM
+        BTP["Binder Thread Pool"] --> SSM
+        WDT["Watchdog Thread"] -->|"monitors"| MT
+        SSM["SystemServiceManager (orchestrator)"] --> BS
+        SSM --> CS
 
-        subgraph "Named Threads"
-            MT["Main Thread<br/>(main looper)"]
-            DT["android.display"]
-            ANT["android.anim"]
-            SAT["android.anim.lf"]
-            UIT["android.ui"]
-            FGT["android.fg"]
-            IOT["android.io"]
-            BGT["android.bg"]
-            PMT["android.perm"]
-        end
-
-        subgraph "Monitoring"
-            WDT["Watchdog Thread"]
-            WDM["watchdog.monitor"]
-        end
-
-        subgraph "Bootstrap Services"
+        subgraph BS["Bootstrap Services"]
             AMS["ActivityManagerService"]
-            ATMS["ActivityTaskManagerService"]
             PMS["PackageManagerService"]
-            PWR["PowerManagerService"]
-            DMS["DisplayManagerService"]
         end
 
-        subgraph "Core Services"
-            BAT["BatteryService"]
-            USG["UsageStatsService"]
-            WVU["WebViewUpdateService"]
-        end
-
-        subgraph "Other Services"
+        subgraph CS["Core + Other Services"]
             WMS["WindowManagerService"]
-            IMS["InputManagerService"]
             NMS["NotificationManagerService"]
-            AUD["AudioService"]
-            LOC["LocationManagerService"]
-            CON["ConnectivityService"]
-            JOB["JobSchedulerService"]
-            100P["100+ more services..."]
+            MORE["+ 100 more..."]
         end
-
-        SSM["SystemServiceManager<br/>(orchestrator)"]
     end
-
-    subgraph "External"
-        ZYG["Zygote<br/>(parent process)"]
-        APP1["App Process 1"]
-        APP2["App Process 2"]
-        APPN["App Process N"]
-        HAL["HAL Services"]
-        SMGR["ServiceManager"]
-    end
-
-    ZYG -->|"fork()"| MT
-    APP1 -->|"Binder IPC"| BT1
-    APP2 -->|"Binder IPC"| BT2
-    APPN -->|"Binder IPC"| BTN
-    HAL -->|"HIDL/AIDL"| IOT
-
-    SSM -->|"lifecycle"| AMS
-    SSM -->|"lifecycle"| WMS
-    SSM -->|"lifecycle"| NMS
-    WDT -->|"monitors"| MT
-    WDT -->|"monitors"| DT
-    WDT -->|"monitors"| FGT
-    WDT -->|"monitors"| IOT
 
     style SSM fill:#ffd,stroke:#333
     style WDT fill:#f99,stroke:#333

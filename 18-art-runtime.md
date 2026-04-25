@@ -291,18 +291,18 @@ Each `Thread` object contains:
 Thread states control GC cooperation:
 
 ```mermaid
-stateDiagram-v2
-    [*] --> kStarting: Thread created
-    kStarting --> kRunnable: Thread started
-    kRunnable --> kNative: JNI call
-    kNative --> kRunnable: JNI return
-    kRunnable --> kSuspended: GC checkpoint
-    kSuspended --> kRunnable: GC complete
-    kRunnable --> kWaiting: Object.wait()
-    kWaiting --> kRunnable: notify()
-    kRunnable --> kBlocked: Monitor enter
-    kBlocked --> kRunnable: Monitor acquired
-    kRunnable --> kTerminated: Thread exit
+flowchart LR
+    START(( )) -->|Thread created| kStarting
+    kStarting -->|Thread started| kRunnable
+    kRunnable -->|JNI call| kNative
+    kNative -->|JNI return| kRunnable
+    kRunnable -->|GC checkpoint| kSuspended
+    kSuspended -->|GC complete| kRunnable
+    kRunnable -->|Object.wait| kWaiting
+    kWaiting -->|notify| kRunnable
+    kRunnable -->|Monitor enter| kBlocked
+    kBlocked -->|Monitor acquired| kRunnable
+    kRunnable -->|Thread exit| kTerminated
 ```
 
 Only threads in `kRunnable` state can access the managed heap. The GC
@@ -408,11 +408,11 @@ stateDiagram-v2
     [*] --> Unlocked
     Unlocked --> ThinLocked: CAS succeeds
     ThinLocked --> Unlocked: Release
-    ThinLocked --> ThinLocked: Recursive lock\n(increment count)
-    ThinLocked --> FatLocked: Contention detected\n(inflate)
-    FatLocked --> Unlocked: Release\n(deflate if possible)
-    FatLocked --> Waiting: Object.wait()
-    Waiting --> FatLocked: notify() / notifyAll()
+    ThinLocked --> ThinLocked: Recursive lock - increment count
+    ThinLocked --> FatLocked: Contention detected - inflate
+    FatLocked --> Unlocked: Release - deflate if possible
+    FatLocked --> Waiting: Object.wait
+    Waiting --> FatLocked: notify or notifyAll
 ```
 
 #### Monitor Pool
@@ -3957,7 +3957,7 @@ sequenceDiagram
     participant Linker as Dynamic Linker
 
     Java->>Runtime: System.loadLibrary("foo")
-    Runtime->>Runtime: Resolve library name\n("foo" -> "libfoo.so")
+    Runtime->>Runtime: Resolve library name<br/>("foo" -> "libfoo.so")
     Runtime->>NL: OpenNativeLibrary()
     NL->>NS: FindNamespaceByClassLoader()
     alt Namespace exists
@@ -3968,7 +3968,7 @@ sequenceDiagram
         NS->>Linker: Configure links
         NS-->>NL: Return new namespace
     end
-    NL->>Linker: android_dlopen_ext()\nwith namespace
+    NL->>Linker: android_dlopen_ext()<br/>with namespace
     Linker-->>NL: Handle or error
     NL->>Runtime: Call JNI_OnLoad()
     Runtime-->>Java: Library loaded
