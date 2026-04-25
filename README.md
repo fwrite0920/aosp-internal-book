@@ -113,7 +113,6 @@ pip install mkdocs-material pymdown-extensions
 # Create symlinks (one-time)
 mkdir -p docs
 for f in [0-9]*.md A-*.md B-*.md index.md; do ln -sf "../$f" "docs/$f"; done
-ln -sf ../cover.svg docs/cover.svg
 
 # Start
 mkdocs serve                       # http://127.0.0.1:8000
@@ -135,7 +134,6 @@ Tests `mkdocs build` on push to `main` and PRs (~2 min).
 A-appendix-key-files.md    Appendix A
 B-appendix-glossary.md     Appendix B
 index.md                   Website homepage
-cover.svg / cover.png      Book cover (Git LFS)
 mkdocs.yml                 MkDocs config (Material theme + Mermaid)
 docs/                      Symlinks for MkDocs (gitignored)
 mkdocs-mermaid-renderer/   Shared Mermaid SVG renderer (Playwright + cache)

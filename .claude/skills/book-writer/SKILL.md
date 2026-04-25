@@ -58,7 +58,7 @@ The label format is `"N. Short Title": NN-slug.md`. Keep labels short — they a
 
 MkDocs reads from `docs/` which contains symlinks to the actual chapter files in the repo root. This indirection exists because MkDocs requires `docs_dir` to be a child directory, but chapters live at the repo root for simplicity.
 
-When creating symlinks, always use relative paths (`../filename.md`) so they work regardless of absolute path. Also symlink any static assets the chapters reference (like `cover.svg`).
+When creating symlinks, always use relative paths (`../filename.md`) so they work regardless of absolute path. Also symlink any static assets the chapters reference.
 
 ## Chapter Structure
 

@@ -1,11 +1,3 @@
-<div style="text-align: center; padding: 2rem 0;">
-  <object data="cover.svg" type="image/svg+xml" style="max-width: 100%; max-height: 80vh;">
-    AOSP Internals — A Developer's Guide to the Android Open Source Project
-  </object>
-</div>
-
----
-
 ## License
 
 This book is licensed under the [GNU General Public License v3.0](https://www.gnu.org/licenses/gpl-3.0.html). You are free to share and adapt this work under the terms of the GPL-3.0. See the [LICENSE](https://github.com/anthropics/aosp-dev-book/blob/main/LICENSE) file for details.

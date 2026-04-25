@@ -61,14 +61,12 @@ plugins:
       enabled: !ENV [MKDOCS_PDF, false]
       concurrency: 8
       output: aosp-internals.pdf
-      cover: cover.svg
       timeout: 30000
       stylesheets:
         - docs/stylesheets/pdf.css
   - epub-generate:
       enabled: !ENV [MKDOCS_EPUB, false]
       output: aosp-internals.epub
-      cover: cover.svg
       timeout: 30000
       stylesheets:
         - docs/stylesheets/epub.css

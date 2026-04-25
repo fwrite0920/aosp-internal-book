@@ -10,7 +10,6 @@ on:
       - 'stylesheets/**'
       - 'javascripts/**'
       - 'overrides/**'
-      - 'cover.svg'
       - '.github/workflows/deploy-pages.yml'
   workflow_dispatch:
 
@@ -31,8 +30,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          lfs: true
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -48,8 +45,8 @@ jobs:
       - name: Create docs symlinks
         run: |
           mkdir -p docs
-          for f in [0-9]*.md A-*.md B-*.md index.md cover.svg; do
-            [ -e "$f" ] && ln -sf "../$f" "docs/$f"
+          for f in [0-9]*.md A-*.md B-*.md index.md; do
+            ln -sf "../$f" "docs/$f"
           done
           echo "Linked $(ls docs/ | wc -l) files"
 
