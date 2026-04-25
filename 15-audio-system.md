@@ -2179,25 +2179,25 @@ AAudio streams follow a strict state machine:
 ```mermaid
 stateDiagram-v2
     [*] --> UNINITIALIZED
-    UNINITIALIZED --> OPEN : open()
-    OPEN --> STARTED : requestStart()
-    STARTED --> PAUSED : requestPause()
-    PAUSED --> STARTED : requestStart()
-    PAUSED --> FLUSHING : requestFlush()
+    UNINITIALIZED --> OPEN : open
+    OPEN --> STARTED : requestStart
+    STARTED --> PAUSED : requestPause
+    PAUSED --> STARTED : requestStart
+    PAUSED --> FLUSHING : requestFlush
     FLUSHING --> FLUSHED : flush complete
-    FLUSHED --> STARTED : requestStart()
-    STARTED --> STOPPING : requestStop()
+    FLUSHED --> STARTED : requestStart
+    STARTED --> STOPPING : requestStop
     STOPPING --> STOPPED : stop complete
-    STOPPED --> STARTED : requestStart()
-    STOPPED --> CLOSING : close()
-    PAUSED --> CLOSING : close()
-    FLUSHED --> CLOSING : close()
-    OPEN --> CLOSING : close()
+    STOPPED --> STARTED : requestStart
+    STOPPED --> CLOSING : close
+    PAUSED --> CLOSING : close
+    FLUSHED --> CLOSING : close
+    OPEN --> CLOSING : close
     CLOSING --> CLOSED : close complete
     CLOSED --> [*]
     STARTED --> DISCONNECTED : device removed
     PAUSED --> DISCONNECTED : device removed
-    DISCONNECTED --> CLOSING : close()
+    DISCONNECTED --> CLOSING : close
 ```
 
 The stream destruction has a safety assertion:
@@ -2732,11 +2732,11 @@ status_t EffectBase::setEnabled_l(bool enabled)
 stateDiagram-v2
     [*] --> IDLE
     IDLE --> STARTING : enable
-    STARTING --> ACTIVE : process()
+    STARTING --> ACTIVE : process
     ACTIVE --> STOPPING : disable
-    STOPPING --> STOPPED : process()
+    STOPPING --> STOPPED : process
     STOPPED --> RESTART : enable
-    RESTART --> ACTIVE : process()
+    RESTART --> ACTIVE : process
     STARTING --> IDLE : disable
     STOPPING --> ACTIVE : enable
     RESTART --> STOPPED : disable

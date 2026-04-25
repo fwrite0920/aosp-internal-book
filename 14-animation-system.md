@@ -295,14 +295,14 @@ computes elapsed time, applies the interpolator, and calls the abstract method
 ```mermaid
 stateDiagram-v2
     [*] --> NotStarted
-    NotStarted --> Initialized: initialize(w, h, pw, ph)
-    Initialized --> Running: getTransformation() first call
-    Running --> Running: getTransformation() each frame
+    NotStarted --> Initialized: initialize w h pw ph
+    Initialized --> Running: getTransformation first call
+    Running --> Running: getTransformation each frame
     Running --> Repeating: repeat count not exhausted
     Repeating --> Running: next cycle
     Running --> Ended: duration exhausted
     Ended --> [*]
-    Running --> Cancelled: cancel()
+    Running --> Cancelled: cancel
     Cancelled --> [*]
 ```
 
@@ -1479,7 +1479,7 @@ graph TD
 ### 14.4.3 Transition Base Class
 
 `Transition.java` (2,451 lines) is the abstract base.  Each subclass must
-implement two methods:
+implement three methods:
 
 1. `captureStartValues(TransitionValues)` -- Record property values before the scene change
 2. `captureEndValues(TransitionValues)` -- Record property values after the scene change
@@ -1876,7 +1876,7 @@ sequenceDiagram
     CalledAct->>CalledAct: startPostponedEnterTransition()
     CalledAct->>CalledAct: mapSharedElements()
     CalledAct->>CalledAct: Create enter transition animators
-    Note over CalledAct: Shared elements animate from\ncalling position to final position
+    Note over CalledAct: Shared elements animate from<br/>calling position to final position
 ```
 
 ### 14.5.4 Shared Element Return Animation Detail
@@ -2483,9 +2483,9 @@ of progress, applying them through `SurfaceControl.Transaction` each frame.
 ```mermaid
 stateDiagram-v2
     [*] --> Idle
-    Idle --> GestureStarted: onBackMotionEvent (DOWN)
+    Idle --> GestureStarted: onBackMotionEvent DOWN
     GestureStarted --> Progressing: onBackProgressed
-    Progressing --> Progressing: onBackProgressed (continuous)
+    Progressing --> Progressing: onBackProgressed continuous
     Progressing --> Committed: onBackInvoked
     Progressing --> Cancelled: onBackCancelled
     Committed --> PlayingClose: play close animation
@@ -2757,10 +2757,10 @@ the current velocity, the spring is considered at rest.
 ```mermaid
 stateDiagram-v2
     [*] --> Created
-    Created --> Running: start()
-    Running --> Running: doAnimationFrame (each VSYNC)
+    Created --> Running: start
+    Running --> Running: doAnimationFrame each VSYNC
     Running --> Ended: force reaches equilibrium
-    Running --> Cancelled: cancel()
+    Running --> Cancelled: cancel
     Ended --> [*]
     Cancelled --> [*]
 

@@ -2794,7 +2794,7 @@ function, which forwards lifecycle callbacks from the `NativeActivity` to the
 application thread via a pipe.
 
 The `ALooper_pollOnce()` call is the heart of the event loop. It waits for
-events from two sources:
+events from three sources:
 
 - `LOOPER_ID_MAIN` (command pipe) -- lifecycle events like `APP_CMD_INIT_WINDOW`
 - `LOOPER_ID_INPUT` (input queue) -- touch, key, and motion events
