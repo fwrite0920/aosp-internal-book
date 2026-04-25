@@ -4,6 +4,8 @@
 
 A comprehensive technical book covering the full AOSP stack — from kernel to apps — with every claim referencing real source code file paths and line numbers.
 
+**Read online:** <https://aospbooks.github.io/aosp-internal-book/>
+
 > **Status: Under Review**
 > All chapters are currently being reviewed for technical accuracy, completeness, and clarity. Content may change. If you spot errors, missing details, or have suggestions, please [open an issue](https://github.com/nicewook/aosp-knowledge/issues) or submit a pull request — feedback from AOSP developers and enthusiasts is very welcome.
 
