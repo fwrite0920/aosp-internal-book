@@ -294,15 +294,15 @@ The lifecycle of a NetworkAgent is:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Created: new NetworkAgent()
-    Created --> Registered: register()
+    [*] --> Created: new NetworkAgent
+    Created --> Registered: register
     Registered --> Connecting: Agent sends capabilities
-    Connecting --> Connected: markConnected()
+    Connecting --> Connected: markConnected
     Connected --> Connected: Update caps/LP/score
     Connected --> Lingering: No more requests
     Lingering --> Connected: New request matches
     Lingering --> Disconnected: Linger timeout
-    Connected --> Disconnected: unregister()
+    Connected --> Disconnected: unregister
     Disconnected --> [*]
 ```
 

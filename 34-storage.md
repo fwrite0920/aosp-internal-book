@@ -3117,14 +3117,14 @@ The complete lifecycle of an encryption key follows this pattern:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Generated: generateStorageKey()
-    Generated --> StoredOnDisk: storeKeyAtomically()
-    StoredOnDisk --> RetrievedFromDisk: retrieveKey()
-    RetrievedFromDisk --> InstalledInKernel: installKey()
+    [*] --> Generated: generateStorageKey
+    Generated --> StoredOnDisk: storeKeyAtomically
+    StoredOnDisk --> RetrievedFromDisk: retrieveKey
+    RetrievedFromDisk --> InstalledInKernel: installKey
     InstalledInKernel --> Active: Files can be accessed
-    Active --> Evicted: evictKey()
+    Active --> Evicted: evictKey
     Evicted --> RetrievedFromDisk: User unlocks again
-    Active --> Destroyed: destroyKey()
+    Active --> Destroyed: destroyKey
     Destroyed --> [*]
 ```
 

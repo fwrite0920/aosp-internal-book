@@ -61,7 +61,7 @@ graph TD
 
     subgraph "system_server Process"
         AMS["AccountManagerService<br/>IAccountManager.Stub"]
-        ADB["(AccountsDb<br/>accounts.db)"]
+        ADB["AccountsDb<br/>accounts.db"]
         TC["TokenCache<br/>LRU in-memory"]
         AAC["AccountAuthenticatorCache<br/>RegisteredServicesCache"]
     end
@@ -312,13 +312,13 @@ user.  The data is stored in two databases per user:
 ```mermaid
 graph TD
     subgraph "User 0 (Owner)"
-        DE0["(DE Database<br/>/data/system_de/0/accounts_de.db<br/>Accounts, grants, visibility)"]
-        CE0["(CE Database<br/>/data/system_ce/0/accounts_ce.db<br/>Passwords, auth tokens, extras)"]
+        DE0["DE Database<br/>/data/system_de/0/accounts_de.db<br/>Accounts, grants, visibility"]
+        CE0["CE Database<br/>/data/system_ce/0/accounts_ce.db<br/>Passwords, auth tokens, extras"]
     end
 
     subgraph "User 10 (Work Profile)"
-        DE10["(DE Database<br/>/data/system_de/10/accounts_de.db)"]
-        CE10["(CE Database<br/>/data/system_ce/10/accounts_ce.db)"]
+        DE10["DE Database<br/>/data/system_de/10/accounts_de.db"]
+        CE10["CE Database<br/>/data/system_ce/10/accounts_ce.db"]
     end
 
     AMS[AccountManagerService] --> DE0
@@ -1114,7 +1114,7 @@ The sync adapter XML resource declares:
 
 ```mermaid
 graph TD
-    subgraph Package Manager
+    subgraph PM_GROUP["Package Manager"]
         PM["PackageManager<br/>Intent scan"]
     end
 
@@ -1173,7 +1173,7 @@ Starting with Android 6.0, App Standby affects sync scheduling.  Apps in
 standby buckets receive reduced sync frequency:
 
 ```
-Source: frameworks/base/services/core/java/com/android/server/content/SyncManager.md
+Source: frameworks/base/services/core/java/com/android/server/content/SyncManager.java
 ```
 
 | Standby Bucket | Sync Behavior |
@@ -1514,7 +1514,7 @@ Source: frameworks/base/services/core/java/com/android/server/content/ContentSer
 
 ```mermaid
 graph TD
-    subgraph Application Process
+    subgraph APP_PROC["Application Process"]
         CR["ContentResolver<br/>Static methods"]
     end
 

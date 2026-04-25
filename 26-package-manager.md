@@ -1421,13 +1421,13 @@ Sessions go through a well-defined lifecycle:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Created: createSession()
-    Created --> Open: openSession()
-    Open --> Staged: write(APK data)
-    Staged --> Sealed: commit()
-    Sealed --> Verifying: startVerification()
+    [*] --> Created: createSession
+    Created --> Open: openSession
+    Open --> Staged: write APK data
+    Staged --> Sealed: commit
+    Sealed --> Verifying: startVerification
     Verifying --> Verified: verification complete
-    Verified --> Installing: installPackage()
+    Verified --> Installing: installPackage
     Installing --> Committed: success
     Installing --> Failed: error
     Committed --> [*]

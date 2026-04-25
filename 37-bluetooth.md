@@ -134,11 +134,11 @@ activates the classic BR/EDR transport and all profiles.
 ```mermaid
 stateDiagram-v2
     [*] --> STATE_OFF
-    STATE_OFF --> STATE_BLE_TURNING_ON : enable()
+    STATE_OFF --> STATE_BLE_TURNING_ON : enable
     STATE_BLE_TURNING_ON --> STATE_BLE_ON : BLE ready
     STATE_BLE_ON --> STATE_TURNING_ON : profile startup
     STATE_TURNING_ON --> STATE_ON : all profiles ready
-    STATE_ON --> STATE_TURNING_OFF : disable()
+    STATE_ON --> STATE_TURNING_OFF : disable
     STATE_TURNING_OFF --> STATE_BLE_ON : profiles stopped
     STATE_BLE_ON --> STATE_BLE_TURNING_OFF : BLE shutdown
     STATE_BLE_TURNING_OFF --> STATE_OFF : complete
@@ -2050,10 +2050,10 @@ Bond state transitions are broadcast to applications:
 ```mermaid
 stateDiagram-v2
     [*] --> BOND_NONE
-    BOND_NONE --> BOND_BONDING : createBond()
+    BOND_NONE --> BOND_BONDING : createBond
     BOND_BONDING --> BOND_BONDED : pairing success
     BOND_BONDING --> BOND_NONE : pairing failed/cancelled
-    BOND_BONDED --> BOND_NONE : removeBond()
+    BOND_BONDED --> BOND_NONE : removeBond
 ```
 
 ### 37.6.7 Key Storage

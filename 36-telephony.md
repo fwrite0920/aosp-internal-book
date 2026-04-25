@@ -1272,12 +1272,12 @@ The eSIM profile lifecycle:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Downloaded : downloadSubscription()
-    Downloaded --> Enabled : switchToSubscription()
-    Enabled --> Disabled : switchToSubscription(other)
-    Disabled --> Enabled : switchToSubscription()
-    Enabled --> Deleted : deleteSubscription()
-    Disabled --> Deleted : deleteSubscription()
+    [*] --> Downloaded : downloadSubscription
+    Downloaded --> Enabled : switchToSubscription
+    Enabled --> Disabled : switchToSubscription other
+    Disabled --> Enabled : switchToSubscription
+    Enabled --> Deleted : deleteSubscription
+    Disabled --> Deleted : deleteSubscription
     Deleted --> [*]
 ```
 
@@ -2022,9 +2022,9 @@ The ImsServiceController maintains a state machine for each feature:
 ```mermaid
 stateDiagram-v2
     [*] --> NOT_AVAILABLE
-    NOT_AVAILABLE --> INITIALIZING : bind()
+    NOT_AVAILABLE --> INITIALIZING : bind
     INITIALIZING --> READY : Feature connected
-    READY --> NOT_AVAILABLE : unbind()
+    READY --> NOT_AVAILABLE : unbind
     READY --> NOT_AVAILABLE : ImsService died
     NOT_AVAILABLE --> INITIALIZING : rebind after crash
 ```
@@ -3973,8 +3973,8 @@ The media direction state machine:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> NO_FLOW : Session opened (no config)
-    NO_FLOW --> SEND_RECEIVE : modifySession()
+    [*] --> NO_FLOW : Session opened, no config
+    NO_FLOW --> SEND_RECEIVE : modifySession
     SEND_RECEIVE --> SEND_ONLY : Remote muted
     SEND_RECEIVE --> RECEIVE_ONLY : Local muted
     SEND_RECEIVE --> INACTIVE : Call HOLD

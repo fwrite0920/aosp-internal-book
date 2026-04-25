@@ -588,10 +588,10 @@ Unlike activities, content providers have a simple lifecycle:
 ```mermaid
 stateDiagram-v2
     [*] --> Created: instantiated via reflection
-    Created --> Attached: attachInfo()
-    Attached --> Active: onCreate() returns true
+    Created --> Attached: attachInfo
+    Attached --> Active: onCreate returns true
     Active --> Active: query / insert / update / delete / call
-    Active --> Shutdown: shutdown() (test only)
+    Active --> Shutdown: shutdown - test only
     Active --> Dead: process killed
     Shutdown --> [*]
     Dead --> [*]
@@ -756,7 +756,7 @@ graph TD
     subgraph "MediaProvider Databases"
         A["internal.db<br/>(system media)"]
         B["external.db<br/>(primary external storage)"]
-        C["<uuid>.db<br/>(removable volume)"]
+        C["{volume_uuid}.db<br/>(removable volume)"]
     end
 
     subgraph "Storage Volumes"
@@ -1670,8 +1670,8 @@ graph TD
     end
 
     subgraph "Storage"
-        D["settings_system.xml<br/>/data/system/users/<uid>/"]
-        E["settings_secure.xml<br/>/data/system/users/<uid>/"]
+        D["settings_system.xml<br/>/data/system/users/{user_id}/"]
+        E["settings_secure.xml<br/>/data/system/users/{user_id}/"]
         F["settings_global.xml<br/>/data/system/users/0/"]
     end
 
