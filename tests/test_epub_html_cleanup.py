@@ -429,14 +429,22 @@ class TestRestoreSvgsAsImages:
         out, files = restore_svgs_as_images(xhtml, svgs)
         assert "<!--__SVG_0__-->" not in out
         import re as _re
-        m = _re.search(r'<img src="mermaid/[0-9a-f]{16}\.svg" alt="Diagram"/>', out)
+        m = _re.search(
+            r'<img src="(mermaid/[0-9a-f]{16}\.svg)" '
+            r'width="10" height="10" alt="Diagram"/>',
+            out,
+        )
         assert m, f"no <img> found in {out!r}"
         assert len(files) == 1
         filename, svg_bytes = files[0]
-        assert filename == m.group(0).split('"')[1]
+        assert filename == m.group(1)
         # SVG file bytes start with XML prolog and carry case-preserved content.
         assert svg_bytes.startswith(b'<?xml')
         assert b'viewBox="0 0 10 10"' in svg_bytes
+        # Width/height are stripped from the saved SVG so readers can render
+        # at zoom-view resolution on demand instead of upscaling a bitmap.
+        assert b' width=' not in svg_bytes
+        assert b' height=' not in svg_bytes
         # Without a cross-SVG prefix, the id stays as declared in the source.
         assert b'id="mmd0"' in svg_bytes
 

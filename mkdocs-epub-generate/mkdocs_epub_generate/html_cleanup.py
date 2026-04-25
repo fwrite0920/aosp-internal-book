@@ -320,6 +320,47 @@ def chapter_slug_for(src_path: str) -> str:
 _SVG_XML_PROLOG = '<?xml version="1.0" encoding="UTF-8"?>\n'
 
 
+def _split_root_dimensions(svg_text: str) -> tuple[str, int, int]:
+    """Strip width/height from the root <svg> and return (svg, w, h).
+
+    Embedded width/height attributes give the SVG a fixed intrinsic pixel
+    size. Many EPUB readers (Apple Books, several Android readers) honor
+    that intrinsic size by rasterizing the SVG at exactly those pixel
+    counts and then upscaling the bitmap to the viewport when the user
+    opens an image in zoom view — which produces a visibly blurry
+    enlargement.
+
+    Removing width/height from the SVG file leaves it as pure vector with
+    only a viewBox: the reader is free to render at the zoomed resolution
+    on demand. Inline display size is then driven by width/height set on
+    the wrapping <img> tag, which respects the epub.css max-width:100%
+    constraint for small-screen readers.
+
+    Returns (stripped_svg, 0, 0) when width/height are absent or the SVG
+    fails to parse, signalling the caller to omit dimensions on the <img>.
+    """
+    try:
+        root = etree.fromstring(svg_text.encode("utf-8"))
+    except etree.XMLSyntaxError:
+        return svg_text, 0, 0
+
+    def _to_int(val: str | None) -> int:
+        if not val:
+            return 0
+        try:
+            return int(float(val))
+        except ValueError:
+            return 0
+
+    w = _to_int(root.get("width"))
+    h = _to_int(root.get("height"))
+    if "width" in root.attrib:
+        del root.attrib["width"]
+    if "height" in root.attrib:
+        del root.attrib["height"]
+    return etree.tostring(root, encoding="unicode"), w, h
+
+
 def restore_svgs_as_images(
     xhtml_str: str,
     svg_list: list[str],
@@ -343,6 +384,11 @@ def restore_svgs_as_images(
       written opaquely, so their case is preserved.
     - <img> respects CSS max-width/max-height universally across EPUB
       readers, so tall diagrams don't clip on small-screen readers.
+
+    Pixel dimensions computed by normalize_svg_xhtml are stripped from
+    the saved SVG file and copied to the <img> tag instead, so the SVG
+    stays purely vector for crisp rendering when the user opens the
+    diagram in a reader's zoom view.
     """
     svg_files: list[tuple[str, bytes]] = []
     seen_hashes: set[str] = set()
@@ -359,12 +405,18 @@ def restore_svgs_as_images(
         # structurally impossible. normalize_svg_xhtml still deduplicates
         # ids that Mermaid emits multiple times within a single SVG.
         normalized = normalize_svg_xhtml(svg_list[idx])
-        svg_bytes = (_SVG_XML_PROLOG + normalized).encode("utf-8")
+        stripped, width, height = _split_root_dimensions(normalized)
+        svg_bytes = (_SVG_XML_PROLOG + stripped).encode("utf-8")
         svg_hash = hashlib.sha256(svg_bytes).hexdigest()[:16]
         filename = f"{dir_prefix}/{svg_hash}.svg"
         if svg_hash not in seen_hashes:
             seen_hashes.add(svg_hash)
             svg_files.append((filename, svg_bytes))
+        if width > 0 and height > 0:
+            return (
+                f'<img src="{filename}" width="{width}" height="{height}" '
+                'alt="Diagram"/>'
+            )
         return f'<img src="{filename}" alt="Diagram"/>'
 
     new_xhtml = _PLACEHOLDER_PATTERN.sub(_sub, xhtml_str)
