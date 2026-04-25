@@ -40,3 +40,13 @@ graph TB
         DEVICES --> ROM[Custom ROM]
     end
 ```
+
+## Support This Project
+
+If this book has helped you understand AOSP, please consider showing your support:
+
+- Star the [repository](https://github.com/aospbooks/aosp-internal-book) on GitHub so other developers can find it.
+- Report errors or suggest improvements via the [issue tracker](https://github.com/aospbooks/aosp-internal-book/issues).
+- Share the book with colleagues and communities working on Android.
+
+Stars and feedback are the main signal that the work is useful, and they motivate continued writing and review.
