@@ -1,4 +1,4 @@
-# Chapter 50 — AI, AppFunctions, and Computer Control
+# Chapter 50: AI, AppFunctions, and Computer Control
 
 Android has evolved from a platform that merely _runs_ apps into one that
 _understands_ them. A constellation of on-device intelligence services now
@@ -1131,14 +1131,14 @@ The callback lifecycle mirrors VirtualDeviceManager session creation:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Pending: requestSession()
-    Pending --> UserApproval: onSessionPending(intentSender)
+    [*] --> Pending: requestSession
+    Pending --> UserApproval: onSessionPending intentSender
     UserApproval --> Created: User approves
     UserApproval --> Failed: User denies
-    Created --> Active: onSessionCreated(session)
-    Active --> Closed: close() or framework event
-    Failed --> [*]: onSessionCreationFailed(errorCode)
-    Closed --> [*]: onSessionClosed()
+    Created --> Active: onSessionCreated session
+    Active --> Closed: close or framework event
+    Failed --> [*]: onSessionCreationFailed errorCode
+    Closed --> [*]: onSessionClosed
 ```
 
 Error codes for session creation:
@@ -3282,10 +3282,10 @@ sequenceDiagram
     participant AS as AppSearch
     participant AFM as AppFunctionManager
 
-    Agent->>AS: search("CreateNote", filterSchemas=AppFunctionStaticMetadata)
-    AS-->>Agent: [doc: {functionId: "com.notes.app#createNote", schema: "CreateNote"}]
-    Agent->>AFM: executeAppFunction(targetPkg="com.notes.app", functionId="com.notes.app#createNote")
-    AFM-->>Agent: ExecuteAppFunctionResponse(resultDocument)
+    Agent->>AS: search("CreateNote", AppFunctionStaticMetadata)
+    AS-->>Agent: doc with functionId and schema
+    Agent->>AFM: executeAppFunction(targetPkg, functionId)
+    AFM-->>Agent: ExecuteAppFunctionResponse
 ```
 
 ### 50.8.10 AppSearch Query Syntax

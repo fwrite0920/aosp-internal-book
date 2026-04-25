@@ -558,14 +558,14 @@ stateDiagram-v2
     [*] --> Disconnected
     Disconnected --> BLE_Appeared : BLE scan match
     Disconnected --> BT_Connected : Bluetooth connected
-    BLE_Appeared --> Present : onDevicePresent()
-    BT_Connected --> Present : onDevicePresent()
-    Present --> AppBound : bindCompanionApp()
+    BLE_Appeared --> Present : onDevicePresent
+    BT_Connected --> Present : onDevicePresent
+    Present --> AppBound : bindCompanionApp
     AppBound --> Present : App process dies
     Present --> Disconnected : BLE/BT disappeared
     AppBound --> Disconnected : BLE/BT disappeared
-    Disconnected --> SelfManaged_Appeared : reportSelfManagedAppeared()
-    SelfManaged_Appeared --> Present : onDevicePresent()
+    Disconnected --> SelfManaged_Appeared : reportSelfManagedAppeared
+    SelfManaged_Appeared --> Present : onDevicePresent
 ```
 
 ---
@@ -1725,12 +1725,12 @@ Source:
 
 ```mermaid
 flowchart LR
-    subgraph Companion Device
+    subgraph "Companion Device"
         HW[Physical Sensor]
         App[Companion App]
     end
 
-    subgraph Android Framework
+    subgraph "Android Framework"
         VDM[VirtualDeviceImpl]
         SC[SensorController]
         SMI[SensorManagerInternal]

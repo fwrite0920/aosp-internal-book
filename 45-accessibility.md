@@ -963,12 +963,12 @@ A screen reader on Android operates through the following cycle:
 ```mermaid
 stateDiagram-v2
     [*] --> Listening
-    Listening --> EventReceived: onAccessibilityEvent()
-    EventReceived --> TreeQuery: getSource() / getRootInActiveWindow()
+    Listening --> EventReceived: onAccessibilityEvent
+    EventReceived --> TreeQuery: getSource / getRootInActiveWindow
     TreeQuery --> NodeAnalysis: Traverse AccessibilityNodeInfo tree
     NodeAnalysis --> SpeechOutput: Speak content description / text
     SpeechOutput --> UserInput: Wait for gesture
-    UserInput --> ActionInjection: performAction() on target node
+    UserInput --> ActionInjection: performAction on target node
     ActionInjection --> Listening: Action complete
 
     state EventReceived {
@@ -1390,14 +1390,14 @@ Key source files:
 
 | File | Lines | Role |
 |------|-------|------|
-| `MagnificationController.java` | ~1300 | Orchestrates mode transitions and UI |
-| `FullScreenMagnificationController.java` | ~2000 | Full-screen zoom via MagnificationSpec |
-| `MagnificationConnectionManager.java` | ~800 | Window magnification via SystemUI |
-| `FullScreenMagnificationGestureHandler.java` | ~1500 | Triple-tap and pinch gesture detection |
-| `WindowMagnificationGestureHandler.java` | ~700 | Window magnification gesture handling |
-| `MagnificationKeyHandler.java` | ~400 | Keyboard shortcut handling |
-| `MagnificationScaleProvider.java` | ~200 | Scale bounds and persistence |
-| `MagnificationGestureHandler.java` | ~300 | Base class for gesture handlers |
+| `MagnificationController.java` | ~1500 | Orchestrates mode transitions and UI |
+| `FullScreenMagnificationController.java` | ~2600 | Full-screen zoom via MagnificationSpec |
+| `MagnificationConnectionManager.java` | ~1400 | Window magnification via SystemUI |
+| `FullScreenMagnificationGestureHandler.java` | ~2100 | Triple-tap and pinch gesture detection |
+| `WindowMagnificationGestureHandler.java` | ~600 | Window magnification gesture handling |
+| `MagnificationKeyHandler.java` | ~170 | Keyboard shortcut handling |
+| `MagnificationScaleProvider.java` | ~140 | Scale bounds and persistence |
+| `MagnificationGestureHandler.java` | ~250 | Base class for gesture handlers |
 
 ### 45.5.2 Full-Screen Magnification
 
@@ -1457,8 +1457,8 @@ stateDiagram-v2
     MAGNIFIED --> VIEWPORT_DRAGGING: Triple tap and hold
     PANNING --> MAGNIFIED: Fingers lifted
     SCALING --> MAGNIFIED: Fingers lifted
-    VIEWPORT_DRAGGING --> IDLE: Finger lifted<br/>(if was not magnified)
-    VIEWPORT_DRAGGING --> MAGNIFIED: Finger lifted<br/>(if was magnified)
+    VIEWPORT_DRAGGING --> IDLE: Finger lifted<br/>if was not magnified
+    VIEWPORT_DRAGGING --> MAGNIFIED: Finger lifted<br/>if was magnified
     MAGNIFIED --> IDLE: Triple tap to exit
 
     state DETECTING {
@@ -2315,7 +2315,7 @@ stateDiagram-v2
     STATE_TOUCH_INTERACTING --> STATE_TOUCH_EXPLORING: Single finger,<br/>slow movement
     STATE_TOUCH_INTERACTING --> STATE_GESTURE_DETECTING: Single finger,<br/>fast movement
     STATE_TOUCH_INTERACTING --> STATE_DRAGGING: Two fingers,<br/>same direction
-    STATE_TOUCH_INTERACTING --> STATE_DELEGATING: Two fingers,<br/>different direction<br/>(multi-touch)
+    STATE_TOUCH_INTERACTING --> STATE_DELEGATING: Two fingers,<br/>different direction<br/>multi-touch
     STATE_TOUCH_EXPLORING --> STATE_CLEAR: ACTION_UP
     STATE_GESTURE_DETECTING --> STATE_CLEAR: Gesture recognized<br/>or timeout
     STATE_DRAGGING --> STATE_CLEAR: All fingers up

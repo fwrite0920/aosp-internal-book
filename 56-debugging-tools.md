@@ -146,7 +146,7 @@ flowchart TD
     Q2 -- "Memory leak" --> HEAP["heapprofd / Android Studio Memory Profiler"]
 
     START --> Q3{"System behavior?"}
-    Q3 -- "Service state" --> DUMPSYS["dumpsys <service>"]
+    Q3 -- "Service state" --> DUMPSYS["dumpsys {service}"]
     Q3 -- "Window layout" --> WINSCOPE["Winscope"]
     Q3 -- "Full system snapshot" --> BUG["bugreportz"]
     Q3 -- "Log messages" --> LOGCAT2["logcat"]
@@ -583,9 +583,9 @@ flowchart TD
     A["GetBufferSizeFromProperties(log_id)"]
     A --> B{"ro.debuggable == true?"}
     B -- Yes --> C{"Automotive or Desktop?"}
-    C -- Yes --> D["Check persist.logd.size.<buffer>"]
+    C -- Yes --> D["Check persist.logd.size.{buffer}"]
     D -- Found --> E["Use custom size"]
-    D -- Not found --> F["Check ro.logd.size.<buffer>"]
+    D -- Not found --> F["Check ro.logd.size.{buffer}"]
     F -- Found --> E
     F -- Not found --> G["Check persist.logd.size"]
     G -- Found --> E
@@ -2508,7 +2508,7 @@ graph TB
     end
 
     subgraph "Output"
-        ZIP["bugreport-<device>-<date>.zip"]
+        ZIP["bugreport-{device}-{date}.zip"]
         TEXT["main text dump"]
         PROTO_BR["Protobuf sections"]
         SCREENSHOTS["Screenshot(s)"]
@@ -3801,7 +3801,7 @@ graph TB
 
     subgraph "Kernel Memory"
         MEMINFO["/proc/meminfo"]
-        PROCMEM["/proc/<pid>/smaps"]
+        PROCMEM["/proc/{pid}/smaps"]
         ION["ION/DMA-BUF tracking"]
         LMK["LMK statistics"]
     end

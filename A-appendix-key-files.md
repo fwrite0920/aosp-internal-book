@@ -32,8 +32,8 @@ file is discussed. Paths are relative to the AOSP root (`$AOSP/`).
 | `build/soong/apex/apex.go` | APEX module build rules |
 | `build/blueprint/context.go` | Blueprint core context and dependency resolution |
 | `build/blueprint/module_ctx.go` | Module context interface for Blueprint |
-| `device/generic/goldfish/BoardConfig.mk` | Emulator board configuration |
-| `device/google/cuttlefish/BoardConfig.mk` | Cuttlefish virtual device board config |
+| `device/generic/goldfish/board/BoardConfigCommon.mk` | Emulator board configuration (common) |
+| `device/google/cuttlefish/vsoc_x86_64/BoardConfig.mk` | Cuttlefish virtual device board config (x86_64) |
 
 ## Boot and Init (Chapter 4)
 

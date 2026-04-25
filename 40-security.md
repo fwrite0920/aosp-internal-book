@@ -1285,7 +1285,7 @@ stateDiagram-v2
     [*] --> Restart: Default mode
     Restart --> EIO: dm-verity corruption detected, device restarts
     note right of EIO: RESTART_CAUSED_BY_HASHTREE_CORRUPTION flag set on next boot
-    EIO --> Restart: New OS version detected (vbmeta digest changed)
+    EIO --> Restart: New OS version detected, vbmeta digest changed
 
     note right of Restart
         Blocks corrupted data,
@@ -2905,12 +2905,12 @@ The key storage mechanism:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Created: fscrypt_create_user_keys()
+    [*] --> Created: fscrypt_create_user_keys
     Created --> DE_Active: Device boots, DE key installed to kernel
-    DE_Active --> CE_Active: User enters credential, fscrypt_unlock_ce_storage()
-    CE_Active --> CE_Locked: Device locks, fscrypt_lock_ce_storage()
+    DE_Active --> CE_Active: User enters credential, fscrypt_unlock_ce_storage
+    CE_Active --> CE_Locked: Device locks, fscrypt_lock_ce_storage
     CE_Locked --> CE_Active: User re-enters credential
-    CE_Active --> Destroyed: User removed, fscrypt_destroy_user_keys()
+    CE_Active --> Destroyed: User removed, fscrypt_destroy_user_keys
     DE_Active --> Destroyed: User removed
     Destroyed --> [*]
 ```

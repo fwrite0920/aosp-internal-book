@@ -1388,8 +1388,8 @@ stateDiagram-v2
     Active --> DeviceOwner : Set as DO
     Active --> ProfileOwner : Set as PO
 
-    DeviceOwner --> Active : clearDeviceOwnerApp()
-    ProfileOwner --> Active : clearProfileOwner()
+    DeviceOwner --> Active : clearDeviceOwnerApp
+    ProfileOwner --> Active : clearProfileOwner
 ```
 
 ### 59.4.3  Password Policies

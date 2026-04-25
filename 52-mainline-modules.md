@@ -2794,11 +2794,11 @@ The complete lifecycle of a Mainline module update:
 stateDiagram-v2
     [*] --> Downloaded: Play downloads new APEX
     Downloaded --> Verified: PackageManager verifies APK signature
-    Verified --> Staged: apexd.submitStagedSession()
-    Staged --> ReadyForReboot: apexd.markStagedSessionReady()
+    Verified --> Staged: apexd submitStagedSession
+    Staged --> ReadyForReboot: apexd markStagedSessionReady
     ReadyForReboot --> Rebooting: Device reboots
     Rebooting --> Activating: apexd processes staged session
-    Activating --> Active: ActivatePackageImpl() succeeds
+    Activating --> Active: ActivatePackageImpl succeeds
 
     Activating --> RollbackPending: Activation fails
     RollbackPending --> RolledBack: Restore from /data/apex/backup/
@@ -3358,7 +3358,7 @@ graph TB
     end
 
     subgraph "Runtime"
-        READY --> APEX_MOUNT["/apex/<module>/"]
+        READY --> APEX_MOUNT["/apex/MODULE/"]
         APEX_MOUNT --> DERIVE["derive_sdk<br/>(set extension versions)"]
         APEX_MOUNT --> LINKER["linkerconfig<br/>(namespace config)"]
         APEX_MOUNT --> CLASSPATH["derive_classpath<br/>(BOOTCLASSPATH)"]
@@ -4058,14 +4058,14 @@ soong_config_variables: {
 
 ```mermaid
 stateDiagram-v2
-    [*] --> INIT: openRangingSession()
-    INIT --> IDLE: onOpened()
-    IDLE --> ACTIVE: start()
-    ACTIVE --> IDLE: stop()
-    ACTIVE --> ACTIVE: onRangingResult()
-    IDLE --> INIT: reconfigure()
-    IDLE --> CLOSED: close()
-    ACTIVE --> CLOSED: close()
+    [*] --> INIT: openRangingSession
+    INIT --> IDLE: onOpened
+    IDLE --> ACTIVE: start
+    ACTIVE --> IDLE: stop
+    ACTIVE --> ACTIVE: onRangingResult
+    IDLE --> INIT: reconfigure
+    IDLE --> CLOSED: close
+    ACTIVE --> CLOSED: close
     CLOSED --> [*]
 
     note right of ACTIVE

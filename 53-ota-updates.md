@@ -359,7 +359,7 @@ enum class UpdateStatus {
 ```mermaid
 stateDiagram-v2
     [*] --> IDLE
-    IDLE --> DOWNLOADING : ApplyPayload()
+    IDLE --> DOWNLOADING : ApplyPayload
     DOWNLOADING --> VERIFYING : Download complete
     VERIFYING --> FINALIZING : Verification passed
     FINALIZING --> UPDATED_NEED_REBOOT : Slot marked active
@@ -1259,7 +1259,7 @@ class CleanupPreviousUpdateAction : public Action<...> {
 ```mermaid
 stateDiagram-v2
     [*] --> MERGE_READY : COW created, rebooted
-    MERGE_READY --> MERGE_BEGIN : InitiateMerge()
+    MERGE_READY --> MERGE_BEGIN : InitiateMerge
     MERGE_BEGIN --> MERGE_IN_PROGRESS : Workers started
     MERGE_IN_PROGRESS --> MERGE_IN_PROGRESS : Processing blocks
     MERGE_IN_PROGRESS --> MERGE_COMPLETE : All blocks merged

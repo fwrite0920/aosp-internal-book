@@ -3013,7 +3013,7 @@ graph LR
     C -->|Performance| F["Perfetto trace"]
     C -->|UI Layout| G["Winscope + dump view hierarchy"]
     C -->|SELinux| H["avc: denied + audit2allow"]
-    C -->|Service| I["dumpsys <service>"]
+    C -->|Service| I["dumpsys {service}"]
 
     D --> J["addr2line / ndk-stack"]
     E --> K["Analyze main/binder thread blocks"]
