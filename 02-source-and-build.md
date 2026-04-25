@@ -699,10 +699,10 @@ graph LR
     B --> C[3. Generate]
     C --> D[4. Write]
 
-    A -->|RegisterModuleType<br/>RegisterSingletonType| A
-    B -->|Parse Android.bp<br/>files recursively| B
-    C -->|ResolveDependencies<br/>Run Mutators<br/>PrepareBuildActions| C
-    D -->|WriteBuildFile<br/>output: build.ninja| D
+    A -->|"RegisterModuleType<br/>RegisterSingletonType"| A
+    B -->|"Parse Android.bp<br/>files recursively"| B
+    C -->|"ResolveDependencies<br/>Run Mutators<br/>PrepareBuildActions"| C
+    D -->|"WriteBuildFile<br/>output: build.ninja"| D
 
     style A fill:#4a90d9,color:#fff
     style B fill:#50b848,color:#fff
@@ -3125,9 +3125,9 @@ graph TB
         C["apexd scans /system/apex/<br/>and /data/apex/"]
         D["For each APEX:<br/>verify signature"]
         E["Mount apex_payload.img<br/>as loop device"]
-        F["Bind-mount to<br/>/apex/<name>/current/"]
+        F["Bind-mount to<br/>/apex/{name}/current/"]
         G["Update linker<br/>configuration"]
-        H["System uses libraries<br/>from /apex/<name>/"]
+        H["System uses libraries<br/>from /apex/{name}/"]
 
         A --> B --> C --> D --> E --> F --> G --> H
     end
