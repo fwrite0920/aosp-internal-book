@@ -9,6 +9,7 @@ A comprehensive technical book covering the full AOSP stack — from kernel to a
 > **Status: Under Review**
 > All chapters are currently being reviewed for technical accuracy, completeness, and clarity. Content may change. If you spot errors, missing details, or have suggestions, please [open an issue](https://github.com/nicewook/aosp-knowledge/issues) or submit a pull request — feedback from AOSP developers and enthusiasts is very welcome.
 
+<!-- --8<-- [start:coverage] -->
 ## What This Book Covers
 
 64 chapters organized bottom-to-top through the Android architecture:
@@ -81,6 +82,7 @@ A comprehensive technical book covering the full AOSP stack — from kernel to a
 | XV | 63 | Custom ROM Guide (step-by-step) | UNDER REVIEW |
 | App. | A | Key Files Reference | UNDER REVIEW |
 | App. | B | Glossary | UNDER REVIEW |
+<!-- --8<-- [end:coverage] -->
 
 ## How to Give Feedback
 

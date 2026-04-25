@@ -1,3 +1,5 @@
+--8<-- "README.md:coverage"
+
 ## License
 
 This book is licensed under the [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0), matching the license of the [Android Open Source Project](https://source.android.com/) it analyzes. See the [LICENSE](https://github.com/aospbooks/aosp-internal-book/blob/main/LICENSE) file for details.
