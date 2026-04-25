@@ -148,4 +148,4 @@ CLAUDE.md                  Project rules for AI agents
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE). Based on analysis of the Android Open Source Project, which is licensed under the Apache License 2.0.
+This project is licensed under the [Apache License 2.0](LICENSE), matching the license of the Android Open Source Project it analyzes.

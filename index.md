@@ -1,8 +1,6 @@
 ## License
 
-This book is licensed under the [GNU General Public License v3.0](https://www.gnu.org/licenses/gpl-3.0.html). You are free to share and adapt this work under the terms of the GPL-3.0. See the [LICENSE](https://github.com/anthropics/aosp-dev-book/blob/main/LICENSE) file for details.
-
-The book is based on analysis of the [Android Open Source Project](https://source.android.com/), which is licensed under the Apache License 2.0.
+This book is licensed under the [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0), matching the license of the [Android Open Source Project](https://source.android.com/) it analyzes. See the [LICENSE](https://github.com/aospbooks/aosp-internal-book/blob/main/LICENSE) file for details.
 
 ## How to Navigate
 
