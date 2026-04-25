@@ -12,6 +12,12 @@ dist/
 # Mermaid SVG cache (pdf-generate plugin)
 .mermaid-cache/
 
+# Mermaid PNG renders (./serve.sh png — visual review only)
+.mermaid-png/
+
+# Claude Code runtime state
+.claude/scheduled_tasks.lock
+
 # OS
 .DS_Store
 Thumbs.db
