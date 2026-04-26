@@ -803,14 +803,14 @@ information.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Monitoring: startFixedActivityModeForDisplay()
+    [*] --> Monitoring: startFixedActivityModeForDisplay
     Monitoring --> ActivityVisible: Top activity matches
     ActivityVisible --> ActivityGone: Activity crashes/backgrounded
-    ActivityGone --> Relaunching: recheck timer fires (500ms)
+    ActivityGone --> Relaunching: recheck timer fires 500ms
     Relaunching --> ActivityVisible: startActivity succeeds
     Relaunching --> CrashBackoff: consecutiveRetries > 5
-    CrashBackoff --> Relaunching: CRASH_FORGET_INTERVAL (2min)
-    Monitoring --> [*]: stopFixedActivityMode()
+    CrashBackoff --> Relaunching: CRASH_FORGET_INTERVAL 2min
+    Monitoring --> [*]: stopFixedActivityMode
 ```
 
 ### 60.1.7 CarActivityService
@@ -1370,7 +1370,7 @@ public final class TvInputManagerService extends SystemService {
 }
 ```
 
-The TIF has three layers:
+The TIF has four layers:
 
 ```mermaid
 graph TB
@@ -1857,7 +1857,7 @@ stateDiagram-v2
     STATE_PIP_MENU --> STATE_PIP: Menu dismissed
     STATE_PIP_MENU --> STATE_NO_PIP: User closes PIP
     STATE_PIP --> STATE_NO_PIP: App exits PIP
-    STATE_PIP_MENU --> [*]: ACTION_TO_FULLSCREEN (returns to full screen)
+    STATE_PIP_MENU --> [*]: ACTION_TO_FULLSCREEN returns to full screen
 
     note right of STATE_PIP
         Window at corner position,

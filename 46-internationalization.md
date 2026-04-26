@@ -826,7 +826,7 @@ characters for display. The algorithm:
 3. Resolves implicit levels based on character classes
 4. Reorders characters for display based on their resolved levels
 
-ICU implements UBA in `external/icu/icu4c/source/common/ubidi.c`. Minikin uses
+ICU implements UBA in `external/icu/icu4c/source/common/ubidi.cpp`. Minikin uses
 this through its `BidiUtils` wrapper:
 
 ```cpp

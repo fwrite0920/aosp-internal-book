@@ -2464,8 +2464,8 @@ stateDiagram-v2
     starting --> running : process forked successfully
     starting --> stopped : fork failed
     running --> stopping : stop command / SIGTERM
-    running --> restarting : process exited (not oneshot)
-    running --> stopped : process exited (oneshot)
+    running --> restarting : process exited not oneshot
+    running --> stopped : process exited oneshot
     stopping --> stopped : process exited
     restarting --> starting : restart delay elapsed
     stopped --> [*]

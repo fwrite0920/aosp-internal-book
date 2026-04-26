@@ -821,11 +821,11 @@ more consistent user control.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Created: App calls createNotificationChannel()
+    [*] --> Created: App calls createNotificationChannel
     Created --> Active: Notification posted on this channel
     Active --> UserModified: User changes settings in System Settings
     UserModified --> Active: New notification uses modified settings
-    Active --> Deleted: App calls deleteNotificationChannel()
+    Active --> Deleted: App calls deleteNotificationChannel
     Deleted --> SoftDeleted: Retained for 30 days
     SoftDeleted --> Restored: App recreates with same ID
     SoftDeleted --> Purged: 30 days elapsed
@@ -1456,7 +1456,7 @@ Supported adjustment keys:
 stateDiagram-v2
     [*] --> Discovered: PackageManager scan
     Discovered --> Enabled: User grants permission
-    Enabled --> Binding: ManagedServices.bindService()
+    Enabled --> Binding: ManagedServices.bindService
     Binding --> Connected: onServiceConnected
     Connected --> Active: onListenerConnected + ranking update
     Active --> Active: onNotificationPosted/Removed/RankingUpdate
@@ -1687,18 +1687,18 @@ Key classes:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> NotificationPosted: NMS posts notification with BubbleMetadata
+    [*] --> NotificationPosted: NMS posts<br/>with BubbleMetadata
     NotificationPosted --> BubbleCreated: BubbleExtractor allows
-    BubbleCreated --> Collapsed: BubbleController.addBubble()
-    Collapsed --> Expanded: User taps bubble
-    Expanded --> Collapsed: User taps outside
-    Collapsed --> Dismissed: User drags to dismiss
-    Expanded --> Dismissed: User drags to dismiss
-    Collapsed --> Overflow: Max bubbles reached
-    Overflow --> Collapsed: User selects from overflow
+    BubbleCreated --> Collapsed: addBubble
+    Collapsed --> Expanded: tap bubble
+    Expanded --> Collapsed: tap outside
+    Collapsed --> Dismissed: drag to dismiss
+    Expanded --> Dismissed: drag to dismiss
+    Collapsed --> Overflow: max reached
+    Overflow --> Collapsed: select from overflow
     Dismissed --> [*]
     NotificationPosted --> Denied: BubbleExtractor denies
-    Denied --> ShadeOnly: Show in notification shade only
+    Denied --> ShadeOnly: shade only
 ```
 
 ### 28.8.6 Bubble-to-Task Mapping

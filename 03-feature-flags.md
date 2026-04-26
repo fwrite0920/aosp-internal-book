@@ -1695,6 +1695,9 @@ func RegisterBuildComponents(ctx android.RegistrationContext) {
     ctx.RegisterParallelSingletonType(
         "exported_java_aconfig_library",
         ExportedJavaDeclarationsLibraryFactory)
+    ctx.RegisterModuleType(
+        "all_aconfig_declarations_extension",
+        AllAconfigDeclarationsExtensionFactory)
 }
 ```
 

@@ -651,16 +651,16 @@ A user goes through several states after creation:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> CREATED : createUser()
-    CREATED --> BOOTING : startUser()
+    [*] --> CREATED : createUser
+    CREATED --> BOOTING : startUser
     BOOTING --> RUNNING_LOCKED : User process started<br/>DE storage unlocked
     RUNNING_LOCKED --> RUNNING_UNLOCKED : Credential entered<br/>CE storage unlocked
 
-    RUNNING_UNLOCKED --> STOPPING : stopUser()
+    RUNNING_UNLOCKED --> STOPPING : stopUser
     STOPPING --> SHUTDOWN : All activities stopped
     SHUTDOWN --> [*]
 
-    RUNNING_UNLOCKED --> RUNNING_UNLOCKED : Switch away<br/>(stays running)
+    RUNNING_UNLOCKED --> RUNNING_UNLOCKED : Switch away, stays running
 
     note right of RUNNING_LOCKED
         Apps can access DE storage only.
@@ -795,8 +795,8 @@ graph TB
         DPC[Device Policy Controller]
     end
 
-    PA -.->|Cross-profile intents<br/>filtered| WA
-    WA -.->|Cross-profile intents<br/>filtered| PA
+    PA -.->|"Cross-profile intents<br/>filtered"| WA
+    WA -.->|"Cross-profile intents<br/>filtered"| PA
 
     style PA fill:#e3f2fd
     style WA fill:#e8f5e9
@@ -994,12 +994,12 @@ A work profile cycles through several states during its lifetime:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Creating: createManagedProfile()
-    Creating --> Running: startUserInBackground()
-    Running --> Paused: requestQuietModeEnabled(true)
-    Paused --> Running: requestQuietModeEnabled(false)
-    Running --> Removing: removeUser()
-    Paused --> Removing: removeUser()
+    [*] --> Creating: createManagedProfile
+    Creating --> Running: startUserInBackground
+    Running --> Paused: requestQuietMode<br/>Enabled(true)
+    Paused --> Running: requestQuietMode<br/>Enabled(false)
+    Running --> Removing: removeUser
+    Paused --> Removing: removeUser
     Removing --> [*]: cleanup complete
 ```
 
@@ -1010,12 +1010,12 @@ This is surfaced as "Pause work apps" in Settings and the work tab toggle in
 the launcher:
 
 ```java
-// Source: frameworks/base/core/java/android/os/UserManager.java:5884
+// Source: frameworks/base/core/java/android/os/UserManager.java:5929
 public boolean requestQuietModeEnabled(
         boolean enableQuietMode,
-        UserHandle userHandle,
-        UserHandle target,
-        @QuietModeFlag int flags)
+        @NonNull UserHandle userHandle,
+        IntentSender target,
+        int flags)
 ```
 
 When quiet mode is **enabled**:

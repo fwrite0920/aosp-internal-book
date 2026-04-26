@@ -529,8 +529,8 @@ The complete search algorithm, from `hw_get_module_by_class()`:
 
 ```mermaid
 flowchart TD
-    A["hw_get_module_by_class(class_id, inst)"] --> B{"ro.hardware.<name><br/>property set?"}
-    B -->|Yes| C["Check <name>.<prop>.so<br/>in /odm, /vendor, /system"]
+    A["hw_get_module_by_class(class_id, inst)"] --> B{"ro.hardware.{name}<br/>property set?"}
+    B -->|Yes| C["Check {name}.{prop}.so<br/>in /odm, /vendor, /system"]
     B -->|No| D["Try variant_keys in order"]
     C -->|Found| L["load() module"]
     C -->|Not Found| D
@@ -543,7 +543,7 @@ flowchart TD
     F -->|Found| L
     G -->|Found| L
     H -->|Found| L
-    I -->|No| J["Try <name>.default.so"]
+    I -->|No| J["Try {name}.default.so"]
     J -->|Found| L
     J -->|Not Found| K["Return -ENOENT"]
     L --> M{"load() success?"}

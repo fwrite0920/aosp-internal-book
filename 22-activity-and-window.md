@@ -323,10 +323,10 @@ stateDiagram-v2
     PAUSED --> STOPPING: stop requested
     PAUSED --> RESUMED: resume again
     STOPPING --> STOPPED: onStop complete
-    STOPPED --> STARTED: restart (onRestart + onStart)
-    STOPPED --> FINISHING: finish() called
-    PAUSED --> FINISHING: finish() while paused
-    RESUMED --> FINISHING: finish() while resumed
+    STOPPED --> STARTED: restart - onRestart + onStart
+    STOPPED --> FINISHING: finish called
+    PAUSED --> FINISHING: finish while paused
+    RESUMED --> FINISHING: finish while resumed
     FINISHING --> DESTROYING: cleanup begins
     DESTROYING --> DESTROYED: onDestroy complete
     DESTROYED --> [*]: ActivityRecord removed
@@ -2142,9 +2142,9 @@ adb pull /data/misc/perfetto-traces/activity_launch.perfetto-trace .
 
 ```mermaid
 gantt
-    title Activity Launch Timeline (approximate)
+    title Activity Launch Timeline (approximate, milliseconds)
     dateFormat X
-    axisFormat %L ms
+    axisFormat %s
 
     section system_server
     startActivity IPC         :s1, 0, 5

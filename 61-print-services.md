@@ -171,9 +171,9 @@ the application and the print framework.
 stateDiagram-v2
     [*] --> onStart: Print initiated
     onStart --> onLayout: Print attributes provided
-    onLayout --> onWrite: Layout complete,<br/>content changed
-    onLayout --> onLayout: Attributes changed again
-    onWrite --> onLayout: Attributes changed again
+    onLayout --> onWrite: Layout done, content changed
+    onLayout --> onLayout: Attributes changed
+    onWrite --> onLayout: Attributes changed
     onWrite --> onFinish: All pages written
     onLayout --> onFinish: User cancels
     onFinish --> [*]: Resources released
@@ -296,7 +296,7 @@ public static final int STATE_CANCELED = 7;  // Canceled (terminal)
 
 ```mermaid
 stateDiagram-v2
-    [*] --> CREATED: print() called
+    [*] --> CREATED: print called
     CREATED --> QUEUED: User confirms<br/>in print UI
 
     QUEUED --> STARTED: PrintService starts<br/>processing
@@ -306,7 +306,7 @@ stateDiagram-v2
     STARTED --> COMPLETED: Print succeeds
     STARTED --> FAILED: Print fails
     STARTED --> CANCELED: User cancels
-    STARTED --> BLOCKED: Printer problem<br/>(paper jam, etc.)
+    STARTED --> BLOCKED: Printer problem<br/>paper jam, etc.
 
     BLOCKED --> STARTED: Problem resolved
     BLOCKED --> FAILED: Unrecoverable
@@ -767,13 +767,13 @@ its own lifecycle independent of the print service.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Created: onCreatePrinterDiscoverySession()
-    Created --> Discovering: onStartPrinterDiscovery(priorityList)
-    Discovering --> Discovering: addPrinters() / removePrinters()
-    Discovering --> Idle: onStopPrinterDiscovery()
-    Idle --> Discovering: onStartPrinterDiscovery(priorityList)
-    Idle --> Destroyed: onDestroy()
-    Discovering --> Destroyed: onDestroy()
+    [*] --> Created: onCreatePrinterDiscoverySession
+    Created --> Discovering: onStartPrinterDiscovery
+    Discovering --> Discovering: addPrinters / removePrinters
+    Discovering --> Idle: onStopPrinterDiscovery
+    Idle --> Discovering: onStartPrinterDiscovery
+    Idle --> Destroyed: onDestroy
+    Discovering --> Destroyed: onDestroy
     Destroyed --> [*]
 ```
 

@@ -1099,7 +1099,7 @@ The keyguard state machine includes AOD-specific transitions:
 stateDiagram-v2
     [*] --> OFF
     OFF --> AOD : Screen off, doze enabled
-    AOD --> LOCKSCREEN : Wake (lift, tap, notification)
+    AOD --> LOCKSCREEN : Wake by lift, tap, notification
     LOCKSCREEN --> AOD : Screen off timeout
     LOCKSCREEN --> BOUNCER : Security challenge
     BOUNCER --> GONE : Correct credentials
@@ -2545,7 +2545,7 @@ stateDiagram-v2
     OFF --> AOD : Screen off,<br/>AOD enabled
 
     DOZING --> AOD : AOD trigger
-    DOZING --> LOCKSCREEN : Wake gesture<br/>(lift/tap/power)
+    DOZING --> LOCKSCREEN : Wake gesture<br/>lift/tap/power
     DOZING --> GONE : Fingerprint<br/>WAKE_AND_UNLOCK
 
     AOD --> LOCKSCREEN : Wake gesture
@@ -2555,8 +2555,8 @@ stateDiagram-v2
     LOCKSCREEN --> PRIMARY_BOUNCER : Security challenge
     LOCKSCREEN --> ALTERNATE_BOUNCER : UDFPS prompt
     LOCKSCREEN --> AOD : Screen off timeout
-    LOCKSCREEN --> DOZING : Screen off (no AOD)
-    LOCKSCREEN --> GONE : Swipe unlock<br/>(no security)
+    LOCKSCREEN --> DOZING : Screen off, no AOD
+    LOCKSCREEN --> GONE : Swipe unlock<br/>no security
     LOCKSCREEN --> GLANCEABLE_HUB : Right edge swipe
     LOCKSCREEN --> OCCLUDED : showWhenLocked<br/>Activity
     LOCKSCREEN --> DREAMING : Dream starts

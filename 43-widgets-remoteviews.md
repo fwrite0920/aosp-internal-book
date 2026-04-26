@@ -322,7 +322,7 @@ The service is split into two classes:
 | Class | Role |
 |---|---|
 | `AppWidgetService.java` | Lifecycle wrapper, registered as `APPWIDGET_SERVICE` |
-| `AppWidgetServiceImpl.java` | The actual IPC implementation (~5,000+ lines) |
+| `AppWidgetServiceImpl.java` | The actual IPC implementation (~7,500 lines) |
 
 `AppWidgetServiceImpl` extends `IAppWidgetService.Stub` and implements
 `WidgetBackupProvider` and `OnCrossProfileWidgetProvidersChangeListener`.
@@ -508,14 +508,14 @@ sent over Binder, then applied (inflated) in the receiving process.
 
 ```mermaid
 flowchart LR
-    subgraph Provider Process
+    subgraph PP["Provider Process"]
         A[Build RemoteViews] --> B[Add Actions]
         B --> C[Parcel via Binder]
     end
     subgraph system_server
         C --> D[Store in Widget.views]
     end
-    subgraph Host Process
+    subgraph HP["Host Process"]
         D --> E[Unparcel RemoteViews]
         E --> F{First time?}
         F -->|Yes| G["apply() -> inflate layout + run actions"]

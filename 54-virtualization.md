@@ -1637,8 +1637,8 @@ A VM goes through a well-defined lifecycle managed by the service:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> NOT_STARTED: createVm()
-    NOT_STARTED --> STARTING: start()
+    [*] --> NOT_STARTED: createVm
+    NOT_STARTED --> STARTING: start
     STARTING --> STARTED: crosvm running
     STARTED --> READY: payload ready callback
     READY --> FINISHED: payload exits normally
@@ -3670,7 +3670,7 @@ vice versa. This provides stronger isolation than containers.
 
 ## 54.17 Security Analysis
 
-### 54.16.1 Trust Boundaries
+### 54.17.1 Trust Boundaries
 
 AVF defines clear trust boundaries between components:
 
@@ -3705,7 +3705,7 @@ graph TB
     CROSVM_HOST -.->|"cannot access\nguest secrets"| PVMFW
 ```
 
-### 54.16.2 Attack Surface Analysis
+### 54.17.2 Attack Surface Analysis
 
 **Host-to-guest attacks (mitigated by pKVM):**
 
@@ -3725,7 +3725,7 @@ graph TB
 - Virtio attacks: Each device has minimal syscall allowlist
 - Resource exhaustion: Memory limits, CPU quotas
 
-### 54.16.3 Rust Safety Guarantees
+### 54.17.3 Rust Safety Guarantees
 
 Both pvmfw and crosvm are written in Rust, providing:
 
@@ -3742,7 +3742,7 @@ and `unsafe` blocks are limited to:
 - Raw pointer manipulation for FDT parsing
 - Inter-stage memory handoff
 
-### 54.16.4 DICE Chain Integrity
+### 54.17.4 DICE Chain Integrity
 
 The DICE chain provides cryptographic binding between boot stages. Key
 derivation follows the Open DICE specification:

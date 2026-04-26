@@ -321,12 +321,12 @@ graph LR
         A2 --> A3[provideKeyResponse]
     end
 
-    subgraph Framework - libmediadrm
+    subgraph FW["Framework - libmediadrm"]
         A1 -.->|JNI| F1[DrmHal::getKeyRequest]
         A3 -.->|JNI| F2[DrmHal::provideKeyResponse]
     end
 
-    subgraph HAL Plugin
+    subgraph HP["HAL Plugin"]
         F1 -.->|AIDL| H1[IDrmPlugin::getKeyRequest]
         F2 -.->|AIDL| H2[IDrmPlugin::provideKeyResponse]
     end
@@ -405,7 +405,7 @@ DrmStatus DrmHal::createPlugin(const uint8_t uuid[16],
 
 ### 42.2.6 DrmHalAidl -- The AIDL Backend
 
-`DrmHalAidl` (`frameworks/av/drm/libmediadrm/DrmHalAidl.cpp`, approximately 900 lines)
+`DrmHalAidl` (`frameworks/av/drm/libmediadrm/DrmHalAidl.cpp`, approximately 1,260 lines)
 contains the full AIDL integration logic. At initialization, it discovers AIDL DRM HAL
 services using `AServiceManager`, queries their supported crypto schemes, and instantiates
 the appropriate `IDrmPlugin` via the factory:
@@ -446,7 +446,7 @@ graph TB
         RMS[IResourceManagerService]
     end
 
-    subgraph DRM Plugin
+    subgraph DP_SG["DRM Plugin"]
         DP[IDrmPlugin sessions]
     end
 

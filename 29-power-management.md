@@ -1,4 +1,4 @@
-# Chapter 29 — Power Management
+# Chapter 29: Power Management
 
 Power management is one of the most critical subsystems in Android. Every milliampere
 matters when a phone must survive a full day of use. Android achieves its battery life
@@ -87,16 +87,16 @@ The state diagram:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> AWAKE : Boot / Power button
-    AWAKE --> DREAMING : User inactivity timeout\n(if dreams enabled)
-    AWAKE --> DOZING : Go to sleep\n(if doze enabled)
-    AWAKE --> ASLEEP : Go to sleep\n(no dream or doze)
-    DREAMING --> DOZING : Dream ends\n(doze component starts)
-    DREAMING --> AWAKE : User touch / Power button
-    DOZING --> ASLEEP : Doze ends
-    DOZING --> AWAKE : Power button / Wake event
-    ASLEEP --> AWAKE : Power button / Alarm / Wake lock
-    ASLEEP --> DOZING : Alarm / Notification\n(ambient display)
+    [*] --> AWAKE : Boot /<br/>Power button
+    AWAKE --> DREAMING : inactivity,<br/>dreams on
+    AWAKE --> DOZING : sleep,<br/>doze on
+    AWAKE --> ASLEEP : sleep,<br/>no dream/doze
+    DREAMING --> DOZING : dream ends,<br/>doze starts
+    DREAMING --> AWAKE : touch /<br/>power button
+    DOZING --> ASLEEP : doze ends
+    DOZING --> AWAKE : power /<br/>wake event
+    ASLEEP --> AWAKE : power / alarm /<br/>wake lock
+    ASLEEP --> DOZING : alarm / notif,<br/>ambient display
 ```
 
 ### 29.1.4 The Dirty Bits Mechanism

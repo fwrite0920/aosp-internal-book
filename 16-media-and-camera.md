@@ -262,20 +262,20 @@ MediaCodec implements a well-defined state machine with the following states:
 ```mermaid
 stateDiagram-v2
     [*] --> UNINITIALIZED
-    UNINITIALIZED --> INITIALIZING : init()
+    UNINITIALIZED --> INITIALIZING : init
     INITIALIZING --> INITIALIZED : onComponentAllocated
-    INITIALIZED --> CONFIGURING : configure()
+    INITIALIZED --> CONFIGURING : configure
     CONFIGURING --> CONFIGURED : onComponentConfigured
-    CONFIGURED --> STARTING : start()
+    CONFIGURED --> STARTING : start
     STARTING --> STARTED : onStartCompleted
-    STARTED --> FLUSHING : flush()
+    STARTED --> FLUSHING : flush
     FLUSHING --> FLUSHED : onFlushCompleted
-    FLUSHED --> STARTED : start()
-    STARTED --> STOPPING : stop()
+    FLUSHED --> STARTED : start
+    STARTED --> STOPPING : stop
     STOPPING --> INITIALIZED : onStopCompleted
-    STARTED --> RELEASING : release()
-    INITIALIZED --> RELEASING : release()
-    CONFIGURED --> RELEASING : release()
+    STARTED --> RELEASING : release
+    INITIALIZED --> RELEASING : release
+    CONFIGURED --> RELEASING : release
     RELEASING --> UNINITIALIZED : onReleaseCompleted
     STARTED --> STARTED : queueInputBuffer / dequeueOutputBuffer
 
@@ -3434,8 +3434,7 @@ The factory selection is based on the content type and data source:
 ```mermaid
 graph TD
     DS["Data Source Type"]
-    DS -->|"Local file"| GS["GenericSource"]
-    DS -->|"HTTP/HTTPS URL"| GS
+    DS -->|"Local file or HTTP(S) URL"| GS["GenericSource"]
     DS -->|"HLS (.m3u8)"| HLS["HTTPLiveSource"]
     DS -->|"RTSP URL"| RTSP["RTSPSource"]
     DS -->|"RTP"| RTP["RTPSource"]

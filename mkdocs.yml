@@ -1,11 +1,14 @@
 site_name: "AOSP Internals"
 site_description: "A Developer's Guide to the Android Open Source Project"
+site_url: "https://aospbooks.github.io/aosp-internal-book/"
 docs_dir: "docs"
 site_dir: "site"
 
 theme:
   name: material
   custom_dir: overrides
+  favicon: favicon.png
+  logo: favicon.png
   features:
     - navigation.sections
     - navigation.top
@@ -42,7 +45,10 @@ markdown_extensions:
       line_spans: __span
       pygments_lang_class: true
   - pymdownx.inlinehilite
-  - pymdownx.snippets
+  - pymdownx.snippets:
+      base_path:
+        - .
+      check_paths: true
   - pymdownx.tabbed:
       alternate_style: true
   - tables
@@ -60,14 +66,12 @@ plugins:
       enabled: !ENV [MKDOCS_PDF, false]
       concurrency: 8
       output: aosp-internals.pdf
-      cover: cover.svg
       timeout: 30000
       stylesheets:
         - docs/stylesheets/pdf.css
   - epub-generate:
       enabled: !ENV [MKDOCS_EPUB, false]
       output: aosp-internals.epub
-      cover: cover.svg
       timeout: 30000
       stylesheets:
         - docs/stylesheets/epub.css

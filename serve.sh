@@ -7,6 +7,12 @@
 #   ./serve.sh status Check if running
 #   ./serve.sh pdf    Build the PDF (outputs site/aosp-internals.pdf)
 #   ./serve.sh epub   Build the EPUB (outputs site/aosp-internals.epub)
+#   ./serve.sh png NN-slug.md [...]
+#                     Render mermaid blocks in the given chapter(s) to PNG
+#                     under .mermaid-png/<slug>/NN-<hash>.png. Use these for
+#                     visual review (text fits in shapes, no overlap, diagram
+#                     content matches the surrounding prose).
+#                     Pass --all instead of a chapter to render every chapter.
 #
 set -euo pipefail
 
@@ -49,8 +55,19 @@ case "${1:-on}" in
     docker compose run --rm build-epub
     echo "EPUB generated: site/aosp-internals.epub"
     ;;
+  png)
+    shift
+    if [ $# -eq 0 ]; then
+      echo "Usage: $0 png NN-slug.md [NN-slug.md ...] | --all" >&2
+      exit 1
+    fi
+    docker compose build serve >/dev/null
+    docker run --rm -v "$PWD":/book -w /book book-serve \
+      python3 tools/render_mermaid_png.py "$@"
+    echo "PNGs written under .mermaid-png/"
+    ;;
   *)
-    echo "Usage: $0 [on|off|status|pdf|epub]"
+    echo "Usage: $0 [on|off|status|pdf|epub|png NN-slug.md]"
     exit 1
     ;;
 esac

@@ -4,9 +4,12 @@
 
 A comprehensive technical book covering the full AOSP stack — from kernel to apps — with every claim referencing real source code file paths and line numbers.
 
+**Read online:** <https://aospbooks.github.io/aosp-internal-book/>
+
 > **Status: Under Review**
 > All chapters are currently being reviewed for technical accuracy, completeness, and clarity. Content may change. If you spot errors, missing details, or have suggestions, please [open an issue](https://github.com/nicewook/aosp-knowledge/issues) or submit a pull request — feedback from AOSP developers and enthusiasts is very welcome.
 
+<!-- --8<-- [start:coverage] -->
 ## What This Book Covers
 
 64 chapters organized bottom-to-top through the Android architecture:
@@ -79,6 +82,7 @@ A comprehensive technical book covering the full AOSP stack — from kernel to a
 | XV | 63 | Custom ROM Guide (step-by-step) | UNDER REVIEW |
 | App. | A | Key Files Reference | UNDER REVIEW |
 | App. | B | Glossary | UNDER REVIEW |
+<!-- --8<-- [end:coverage] -->
 
 ## How to Give Feedback
 
@@ -113,7 +117,6 @@ pip install mkdocs-material pymdown-extensions
 # Create symlinks (one-time)
 mkdir -p docs
 for f in [0-9]*.md A-*.md B-*.md index.md; do ln -sf "../$f" "docs/$f"; done
-ln -sf ../cover.svg docs/cover.svg
 
 # Start
 mkdocs serve                       # http://127.0.0.1:8000
@@ -135,7 +138,6 @@ Tests `mkdocs build` on push to `main` and PRs (~2 min).
 A-appendix-key-files.md    Appendix A
 B-appendix-glossary.md     Appendix B
 index.md                   Website homepage
-cover.svg / cover.png      Book cover (Git LFS)
 mkdocs.yml                 MkDocs config (Material theme + Mermaid)
 docs/                      Symlinks for MkDocs (gitignored)
 mkdocs-mermaid-renderer/   Shared Mermaid SVG renderer (Playwright + cache)
@@ -150,4 +152,4 @@ CLAUDE.md                  Project rules for AI agents
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE). Based on analysis of the Android Open Source Project, which is licensed under the Apache License 2.0.
+This project is licensed under the [Apache License 2.0](LICENSE), matching the license of the Android Open Source Project it analyzes.

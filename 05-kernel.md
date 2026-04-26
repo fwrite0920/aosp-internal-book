@@ -656,10 +656,10 @@ graph TB
     end
 
     subgraph "New: DMA-BUF Heaps (Upstream)"
-        HEAP_DEV["/dev/dma_heap/<name>"]
+        HEAP_DEV["/dev/dma_heap/{name}"]
         SYS_HEAP["System Heap<br/>/dev/dma_heap/system"]
         CMA_HEAP["CMA Heap<br/>/dev/dma_heap/linux,cma"]
-        VENDOR_HEAP["Vendor Heaps<br/>/dev/dma_heap/<vendor>"]
+        VENDOR_HEAP["Vendor Heaps<br/>/dev/dma_heap/{vendor}"]
         DMABUF_FD["DMA-BUF fd"]
 
         HEAP_DEV --> SYS_HEAP

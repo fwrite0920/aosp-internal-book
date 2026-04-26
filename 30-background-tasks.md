@@ -134,7 +134,7 @@ stateDiagram-v2
     Active --> Idle: Screen off +<br/>stationary +<br/>unplugged
     Idle --> IdleMaintenance: Maintenance window
     IdleMaintenance --> Idle: Window ends
-    Idle --> Active: Screen on /\nmotion / charging
+    Idle --> Active: Screen on /<br/>motion / charging
 
     state Idle {
         [*] --> LightDoze: Screen off
@@ -874,7 +874,7 @@ flowchart TD
     A["Alarm fires at<br/>requested time"] --> B{"Device Idle<br/>(Doze) Policy"}
     B -->|In Doze, not exempt| C["Defer to next<br/>maintenance window"]
     B -->|Not in Doze, or exempt| D{"Battery Saver<br/>Policy"}
-    D -->|Battery Saver on,<br/>not exempt| E["Defer alarm"]
+    D -->|"Battery Saver on,<br/>not exempt"| E["Defer alarm"]
     D -->|OK| F{"App Standby<br/>Policy"}
     F -->|Bucket limit exceeded| G["Defer alarm"]
     F -->|Within quota| H{"Requester<br/>Policy"}
@@ -1112,16 +1112,16 @@ callback from `JobSchedulerService` and dispatches it to the appropriate
 
 ```mermaid
 stateDiagram-v2
-    [*] --> ENQUEUED: enqueue()
+    [*] --> ENQUEUED: enqueue
     ENQUEUED --> RUNNING: Constraints met
-    RUNNING --> SUCCEEDED: Result.success()
-    RUNNING --> FAILED: Result.failure()
-    RUNNING --> ENQUEUED: Result.retry()
-    ENQUEUED --> BLOCKED: Depends on unfinished work
-    BLOCKED --> ENQUEUED: Dependencies complete
-    ENQUEUED --> CANCELLED: cancel()
-    RUNNING --> CANCELLED: cancel()
-    BLOCKED --> CANCELLED: cancel()
+    RUNNING --> SUCCEEDED: Result.success
+    RUNNING --> FAILED: Result.failure
+    RUNNING --> ENQUEUED: Result.retry
+    ENQUEUED --> BLOCKED: depends on<br/>unfinished work
+    BLOCKED --> ENQUEUED: dependencies<br/>complete
+    ENQUEUED --> CANCELLED: cancel
+    RUNNING --> CANCELLED: cancel
+    BLOCKED --> CANCELLED: cancel
     SUCCEEDED --> [*]
     FAILED --> [*]
     CANCELLED --> [*]

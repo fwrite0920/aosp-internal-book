@@ -2546,13 +2546,13 @@ flowchart TD
     Start["Memory Issue<br/>Detected"] --> Q1{"What kind<br/>of issue?"}
 
     Q1 -->|"High overall<br/>memory usage"| DumpSys["dumpsys meminfo<br/>(system-wide overview)"]
-    Q1 -->|"Single app<br/>using too much"| AppDebug["dumpsys meminfo <pkg><br/>(per-app breakdown)"]
+    Q1 -->|"Single app<br/>using too much"| AppDebug["dumpsys meminfo {pkg}<br/>(per-app breakdown)"]
     Q1 -->|"Gradual memory<br/>increase over time"| ProcStats["procstats<br/>(long-term trends)"]
     Q1 -->|"Native memory<br/>leak"| NativeLeak["heapprofd via Perfetto<br/>(allocation backtraces)"]
     Q1 -->|"Java/Kotlin<br/>memory leak"| JavaLeak["Android Studio Profiler<br/>or hprof dump"]
     Q1 -->|"Unreachable native<br/>allocations"| Unreachable["libmemunreachable<br/>(conservative GC scan)"]
     Q1 -->|"Graphics buffer<br/>leak"| GraphicsLeak["dumpsys SurfaceFlinger<br/>+ dumpsys gpu"]
-    Q1 -->|"Per-mapping<br/>breakdown"| ShowMap["showmap <pid><br/>(smaps analysis)"]
+    Q1 -->|"Per-mapping<br/>breakdown"| ShowMap["showmap {pid}<br/>(smaps analysis)"]
     Q1 -->|"Real-time system<br/>monitoring"| Perfetto["Perfetto trace<br/>(sys_stats + process_stats)"]
     Q1 -->|"Shared library<br/>memory impact"| LibRank["librank<br/>(library memory ranking)"]
 
@@ -2888,28 +2888,28 @@ stateDiagram-v2
     Visible --> Perceptible: Service with notification
     Perceptible --> Background: Activity stopped
     Background --> Cached: No active components
-    Cached --> Killed: lmkd kills or system reclaim
+    Cached --> Killed: lmkd kills
 
-    Foreground --> Background: onStop()
-    Background --> Foreground: onRestart()
-    Cached --> Foreground: onRestart()
+    Foreground --> Background: onStop
+    Background --> Foreground: onRestart
+    Cached --> Foreground: onRestart
     Background --> Cached: All components stopped
 
     state Foreground {
         [*] --> Active: oom_adj = 0
         Active --> [*]: Still using memory
-        note right of Active: Full memory access\nNo trim callbacks
+        note right of Active: Full memory access<br/>No trim callbacks
     }
 
     state Cached {
         [*] --> LowPriority: oom_adj = 900-999
         LowPriority --> [*]: Candidate for killing
-        note right of LowPriority: onTrimMemory(COMPLETE)\nshould release everything
+        note right of LowPriority: onTrimMemory COMPLETE<br/>should release everything
     }
 
     state Killed {
         [*] --> Destroyed: Memory reclaimed
-        note right of Destroyed: Process gone\nSaved state in Bundle
+        note right of Destroyed: Process gone<br/>Saved state in Bundle
     }
 ```
 

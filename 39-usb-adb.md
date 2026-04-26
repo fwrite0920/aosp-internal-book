@@ -301,7 +301,7 @@ stateDiagram-v2
     DISCONNECTED --> CONNECTED: Cable plugged in
     CONNECTED --> CONFIGURED: Host completes enumeration
     CONFIGURED --> DISCONNECTED: Cable removed
-    CONFIGURED --> CONNECTED: Re-enumeration (function switch)
+    CONFIGURED --> CONNECTED: Re-enumeration on function switch
 
     state CONFIGURED {
         [*] --> CHARGING: No data function
@@ -430,9 +430,9 @@ The binding lifecycle follows the MTP function state:
 stateDiagram-v2
     [*] --> Unbound: MTP not active
     Unbound --> Binding: MTP function enabled
-    Binding --> Bound: onServiceConnected()
+    Binding --> Bound: onServiceConnected
     Bound --> Unbinding: MTP function disabled
-    Unbinding --> Unbound: onServiceDisconnected()
+    Unbinding --> Unbound: onServiceDisconnected
     Bound --> Bound: Transfer in progress
 ```
 

@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - '**.md'
+      - '**.png'
       - 'mkdocs.yml'
       - '.github/workflows/build-test.yml'
   pull_request:
@@ -31,7 +32,7 @@ jobs:
       - name: Create docs symlinks
         run: |
           mkdir -p docs
-          for f in [0-9]*.md A-*.md B-*.md index.md; do
+          for f in [0-9]*.md A-*.md B-*.md index.md favicon.png; do
             ln -sf "../$f" "docs/$f"
           done
           echo "Linked $(ls docs/ | wc -l) files"

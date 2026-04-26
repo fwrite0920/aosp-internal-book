@@ -1272,10 +1272,9 @@ graph LR
 
     DQ -->|Send event| IC
     IC -->|Write to socket| LP
-    IC -->|Store in| WT
+    IC -->|Add or remove pending| WT
     AT -->|Monitor timeout| WT
     LP -->|Finished signal| IC
-    IC -->|Remove from| WT
 ```
 
 If an application does not send a `finished` signal within 5 seconds (the
@@ -1933,15 +1932,15 @@ A Codec2 component goes through a well-defined lifecycle:
 ```mermaid
 stateDiagram-v2
     [*] --> UNLOADED
-    UNLOADED --> LOADED: create()
-    LOADED --> RUNNING: start()
-    RUNNING --> LOADED: stop()
-    RUNNING --> RUNNING: process()
-    RUNNING --> FLUSHING: flush()
+    UNLOADED --> LOADED: create
+    LOADED --> RUNNING: start
+    RUNNING --> LOADED: stop
+    RUNNING --> RUNNING: process
+    RUNNING --> FLUSHING: flush
     FLUSHING --> RUNNING: flush complete
-    LOADED --> UNLOADED: destroy()
+    LOADED --> UNLOADED: destroy
     RUNNING --> ERROR: error
-    ERROR --> LOADED: reset()
+    ERROR --> LOADED: reset
 ```
 
 The component processes work items from an input queue:

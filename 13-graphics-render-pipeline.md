@@ -526,7 +526,7 @@ graph TD
     B --> C["API Layer<br/>(api.cpp)"]
     C --> D["Validation Layers<br/>(Optional)"]
     D --> E["Driver Layer<br/>(driver.cpp)"]
-    E --> F["Vendor Vulkan HAL<br/>(vulkan.<name>.so)"]
+    E --> F["Vendor Vulkan HAL<br/>(vulkan.{name}.so)"]
     F --> G["GPU Hardware"]
 
     subgraph "Android Additions"
@@ -1788,16 +1788,16 @@ void CacheManager::onThreadIdle() {
 ```mermaid
 stateDiagram-v2
     [*] --> NoContext
-    NoContext --> GLContext : requireGlContext()
-    NoContext --> VkContext : requireVkContext()
-    GLContext --> NoContext : destroyRenderingContext()
-    VkContext --> NoContext : destroyRenderingContext()
+    NoContext --> GLContext : requireGlContext
+    NoContext --> VkContext : requireVkContext
+    GLContext --> NoContext : destroyRenderingContext
+    VkContext --> NoContext : destroyRenderingContext
     GLContext --> GLContext : frame rendering
     VkContext --> VkContext : frame rendering
 
     note right of GLContext
         EglManager.initialize()
-        GrDirectContexts : :MakeGL
+        GrDirectContexts::MakeGL
     end note
 
     note right of VkContext

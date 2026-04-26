@@ -746,16 +746,16 @@ Each `ProviderSession` tracks its lifecycle through a state machine:
 ```mermaid
 stateDiagram-v2
     [*] --> NOT_STARTED
-    NOT_STARTED --> PENDING : invokeSession()
-    PENDING --> CREDENTIALS_RECEIVED : onProviderResponseSuccess()<br/>(has credentials)
-    PENDING --> SAVE_ENTRIES_RECEIVED : onProviderResponseSuccess()<br/>(create flow)
-    PENDING --> EMPTY_RESPONSE : onProviderResponseSuccess()<br/>(no credentials)
-    PENDING --> CANCELED : cancelProviderRemoteSession()
-    PENDING --> SERVICE_DEAD : onProviderServiceDied()
+    NOT_STARTED --> PENDING : invokeSession
+    PENDING --> CREDENTIALS_RECEIVED : onProviderResponseSuccess<br/>has credentials
+    PENDING --> SAVE_ENTRIES_RECEIVED : onProviderResponseSuccess<br/>create flow
+    PENDING --> EMPTY_RESPONSE : onProviderResponseSuccess<br/>no credentials
+    PENDING --> CANCELED : cancelProviderRemoteSession
+    PENDING --> SERVICE_DEAD : onProviderServiceDied
 
-    CREDENTIALS_RECEIVED --> COMPLETE : onUiEntrySelected()<br/>(final response)
+    CREDENTIALS_RECEIVED --> COMPLETE : onUiEntrySelected<br/>final response
     CREDENTIALS_RECEIVED --> NO_CREDENTIALS_FROM_AUTH_ENTRY : auth entry empty
-    SAVE_ENTRIES_RECEIVED --> COMPLETE : onUiEntrySelected()
+    SAVE_ENTRIES_RECEIVED --> COMPLETE : onUiEntrySelected
 
     COMPLETE --> [*]
     CANCELED --> [*]

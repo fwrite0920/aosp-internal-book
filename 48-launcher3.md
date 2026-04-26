@@ -1,4 +1,4 @@
-# Chapter 48: Launcher3 -- The Android Home Screen
+# Chapter 48: Launcher3 - The Android Home Screen
 
 Launcher3 is the default home screen application in AOSP, responsible for the experience
 users see first after unlocking their device. It manages app icons on the workspace,
@@ -574,10 +574,10 @@ Launcher3 adapts its grid to different screen sizes through a two-tier system:
     launcher:deviceCategory="phone" >
 ```
 
-The IDP supports multiple grid sizes: `3_by_3`, `4_by_4`, `5_by_5`, `5_by_8`,
-`6_by_5`, `7_by_3`, and `8_by_3`. Each grid definition includes display options
-that specify icon sizes, text sizes, and border spacing for different screen
-dimensions.
+The IDP supports multiple grid sizes (`3_by_3`, `4_by_4`, `5_by_5`, `6_by_5`)
+plus a `fixed_landscape_mode` profile. Each grid definition includes display
+options that specify icon sizes, text sizes, and border spacing for different
+screen dimensions.
 
 **DeviceProfile** is the runtime profile computed for the current display
 configuration. It incorporates responsive specifications:

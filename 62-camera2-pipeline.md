@@ -181,19 +181,19 @@ The `StateCallback` abstract inner class provides the lifecycle notifications:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Opening: openCamera()
-    Opening --> Opened: onOpened()
-    Opening --> Error: onError()
-    Opened --> Configured: createCaptureSession()
-    Configured --> Capturing: capture() / setRepeatingRequest()
-    Capturing --> Configured: stopRepeating()
-    Configured --> Disconnected: onDisconnected()
-    Capturing --> Disconnected: onDisconnected()
-    Opened --> Closed: close()
-    Configured --> Closed: close()
-    Capturing --> Closed: close()
-    Disconnected --> Closed: close()
-    Error --> Closed: close()
+    [*] --> Opening: openCamera
+    Opening --> Opened: onOpened
+    Opening --> Error: onError
+    Opened --> Configured: createCaptureSession
+    Configured --> Capturing: capture / setRepeatingRequest
+    Capturing --> Configured: stopRepeating
+    Configured --> Disconnected: onDisconnected
+    Capturing --> Disconnected: onDisconnected
+    Opened --> Closed: close
+    Configured --> Closed: close
+    Capturing --> Closed: close
+    Disconnected --> Closed: close
+    Error --> Closed: close
     Closed --> [*]
 ```
 
@@ -300,15 +300,15 @@ Session lifecycle callbacks:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Configuring: createCaptureSession()
-    Configuring --> Configured: onConfigured()
-    Configuring --> Failed: onConfigureFailed()
+    [*] --> Configuring: createCaptureSession
+    Configuring --> Configured: onConfigured
+    Configuring --> Failed: onConfigureFailed
     Configured --> Active: capture/setRepeatingRequest
-    Active --> Ready: onReady() (all requests processed)
+    Active --> Ready: onReady - all requests processed
     Ready --> Active: new capture submitted
-    Active --> Closed: close() / new session created
-    Ready --> Closed: close() / new session created
-    Configured --> Closed: close()
+    Active --> Closed: close / new session created
+    Ready --> Closed: close / new session created
+    Configured --> Closed: close
     Failed --> [*]
     Closed --> [*]
 ```
@@ -560,13 +560,13 @@ Camera3Device operates several internal threads:
 
 ```mermaid
 graph LR
-    subgraph Camera3Device Threads
+    subgraph C3T["Camera3Device Threads"]
         RT["RequestThread<br/>Submits requests to HAL"]
         FP["FrameProcessorBase<br/>Processes result metadata"]
         ST["StatusTracker<br/>Tracks component readiness"]
     end
 
-    subgraph Camera3Device State
+    subgraph C3S["Camera3Device State"]
         IFR["InFlightRequest Map<br/>frame_number -> request info"]
         SQ["RequestQueue<br/>Pending requests"]
         STREAMS["Stream Map<br/>stream_id -> Camera3Stream"]
@@ -638,13 +638,13 @@ graph TD
         DH["DeviceInfo3<br/>Per-device metadata"]
     end
 
-    subgraph AIDL Provider
+    subgraph AIDLP["AIDL Provider"]
         AP["ICameraProvider<br/>AIDL HAL"]
         AD1["ICameraDevice<br/>Camera 0"]
         AD2["ICameraDevice<br/>Camera 1"]
     end
 
-    subgraph HIDL Provider
+    subgraph HIDLP["HIDL Provider"]
         HP["ICameraProvider@2.7<br/>HIDL HAL"]
         HD1["ICameraDevice@3.7<br/>Camera 2"]
     end
@@ -837,7 +837,7 @@ Source: frameworks/base/core/java/android/hardware/camera2/impl/FrameNumberTrack
 
 ```mermaid
 graph LR
-    subgraph Frame Number Flow
+    subgraph FNF["Frame Number Flow"]
         REQ["CaptureRequest<br/>frame_number = N"]
         HAL_REQ["HAL processCaptureRequest<br/>frame_number = N"]
         SHUTTER["notify SHUTTER<br/>frame_number = N, timestamp T"]
@@ -1043,7 +1043,7 @@ Source: frameworks/av/services/camera/libcameraservice/api2/JpegRCompositeStream
 
 ```mermaid
 graph LR
-    subgraph Camera HAL Output
+    subgraph CHO["Camera HAL Output"]
         YUV["YUV Frame<br/>HDR content"]
         SDR["JPEG Frame<br/>SDR content"]
     end
@@ -1193,13 +1193,13 @@ format, which the GPU can composite directly:
 
 ```mermaid
 graph LR
-    subgraph Camera Service
+    subgraph CS["Camera Service"]
         C3OS[Camera3OutputStream]
     end
     subgraph BufferQueue
         BQ["BufferQueue<br/>IGraphicBufferProducer ↔ IGraphicBufferConsumer"]
     end
-    subgraph Application Process
+    subgraph AP["Application Process"]
         ST["SurfaceTexture<br/>GL_TEXTURE_EXTERNAL_OES"]
         TV[TextureView / SurfaceView]
     end
@@ -1407,11 +1407,11 @@ more physical cameras:
 
 ```mermaid
 graph TD
-    subgraph Logical Camera ID 0
+    subgraph LCI["Logical Camera ID 0"]
         LC["Logical Camera<br/>CameraCharacteristics"]
     end
 
-    subgraph Physical Cameras
+    subgraph PCS["Physical Cameras"]
         PC0["Physical Camera 2<br/>Wide Angle"]
         PC1["Physical Camera 3<br/>Ultra-Wide"]
         PC2["Physical Camera 4<br/>Telephoto"]
@@ -1421,7 +1421,7 @@ graph TD
     LC --> PC1
     LC --> PC2
 
-    subgraph Application View
+    subgraph AV["Application View"]
         APP["Application sees<br/>Camera ID 0<br/>with zoom range 0.5x - 10x"]
     end
 
@@ -1530,7 +1530,7 @@ the HAL with annotated stream configurations:
 
 ```mermaid
 graph TD
-    subgraph Application Requests
+    subgraph AR["Application Requests"]
         R1["OutputConfiguration<br/>Surface A → Physical Camera 2"]
         R2["OutputConfiguration<br/>Surface B → Physical Camera 4"]
         R3["OutputConfiguration<br/>Surface C → Logical Camera"]
@@ -1540,7 +1540,7 @@ graph TD
         SC["Stream Configuration<br/>configureStreams()"]
     end
 
-    subgraph HAL Processing
+    subgraph HP["HAL Processing"]
         PS1["Physical Stream 1<br/>physicalCameraId = 2<br/>Wide angle sensor"]
         PS2["Physical Stream 2<br/>physicalCameraId = 4<br/>Telephoto sensor"]
         LS["Logical Stream<br/>No physicalCameraId<br/>Auto-selected sensor"]
@@ -2035,16 +2035,16 @@ Java API.  The NDK implementation wraps `ICameraDeviceUser`:
 
 ```mermaid
 graph TD
-    subgraph NDK Layer
+    subgraph NDKL["NDK Layer"]
         NC[NdkCameraDevice.cpp]
         NI[impl/ACameraDevice.cpp]
     end
 
-    subgraph Binder IPC
+    subgraph BIPC["Binder IPC"]
         BINDER[ICameraDeviceUser.aidl]
     end
 
-    subgraph Camera Service
+    subgraph CSV["Camera Service"]
         CDC[CameraDeviceClient]
         C3D[Camera3Device]
     end

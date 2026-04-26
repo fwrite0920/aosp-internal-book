@@ -966,8 +966,8 @@ Key callbacks organized by lifecycle:
 ```mermaid
 stateDiagram-v2
     [*] --> shouldOverrideUrlLoading : Navigation initiated
-    shouldOverrideUrlLoading --> onPageStarted : return false (allow)
-    shouldOverrideUrlLoading --> [*] : return true (cancel)
+    shouldOverrideUrlLoading --> onPageStarted : return false, allow
+    shouldOverrideUrlLoading --> [*] : return true, cancel
 
     onPageStarted --> onLoadResource : For each sub-resource
     onPageStarted --> onPageCommitVisible : Body starts rendering
@@ -1324,17 +1324,17 @@ and source code reveal several patterns:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Created : new WebView(context)
-    Created --> Configured : setWebViewClient(), getSettings()
-    Configured --> Loading : loadUrl()
-    Loading --> Active : onPageFinished()
-    Active --> Paused : onPause()
-    Paused --> Active : onResume()
-    Active --> Destroyed : destroy()
-    Paused --> Destroyed : destroy()
+    [*] --> Created : new WebView with context
+    Created --> Configured : setWebViewClient, getSettings
+    Configured --> Loading : loadUrl
+    Loading --> Active : onPageFinished
+    Active --> Paused : onPause
+    Paused --> Active : onResume
+    Active --> Destroyed : destroy
+    Paused --> Destroyed : destroy
     Destroyed --> [*]
 
-    Active --> Loading : loadUrl() / reload()
+    Active --> Loading : loadUrl / reload
     Loading --> Loading : Sub-resource loads
 
     note right of Destroyed

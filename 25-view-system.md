@@ -67,7 +67,7 @@ The Android view system is built on three pillars:
    measure-layout-draw cycle through `performTraversals()`.
 
 ```
-Source: frameworks/base/core/java/android/view/View.java (line 139 of ViewGroup.java)
+Source: frameworks/base/core/java/android/view/ViewGroup.java (line 139)
 
     public abstract class ViewGroup extends View implements ViewParent, ViewManager {
         ...
@@ -270,14 +270,14 @@ The lifecycle of these flags during a single frame:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Invalidated: invalidate()
-    Invalidated --> ForceLayout: requestLayout()
-    ForceLayout --> Measuring: measure() called
-    Measuring --> MeasuredSet: setMeasuredDimension()
+    [*] --> Invalidated: invalidate
+    Invalidated --> ForceLayout: requestLayout
+    ForceLayout --> Measuring: measure called
+    Measuring --> MeasuredSet: setMeasuredDimension
     MeasuredSet --> LayoutRequired: PFLAG_LAYOUT_REQUIRED set
-    LayoutRequired --> Laying: layout() called
+    LayoutRequired --> Laying: layout called
     Laying --> LaidOut: PFLAG3_IS_LAID_OUT set
-    LaidOut --> Drawing: draw() called
+    LaidOut --> Drawing: draw called
     Drawing --> Drawn: PFLAG_DRAWN set
     Drawn --> CacheValid: PFLAG_DRAWING_CACHE_VALID set
     CacheValid --> [*]: Frame complete
@@ -1327,7 +1327,7 @@ When `FLAG_SPLIT_MOTION_EVENTS` is set (the default since API 11),
 
 ```mermaid
 graph LR
-    subgraph TouchTarget Chain
+    subgraph TT["TouchTarget Chain"]
         T1["Target 1<br/>child: Button A<br/>pointerIds: 0x01"]
         T2["Target 2<br/>child: Button B<br/>pointerIds: 0x02"]
     end
@@ -1382,15 +1382,15 @@ interface.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Created: WindowManagerGlobal.addView()
-    Created --> ViewSet: setView(decor, layoutParams)
-    ViewSet --> Active: requestLayout() + addToDisplayAsUser()
-    Active --> Traversing: scheduleTraversals()
-    Traversing --> Active: performTraversals() complete
+    [*] --> Created: WindowManagerGlobal.addView
+    Created --> ViewSet: setView decor, layoutParams
+    ViewSet --> Active: requestLayout + addToDisplayAsUser
+    Active --> Traversing: scheduleTraversals
+    Traversing --> Active: performTraversals complete
     Active --> Stopped: activity paused
     Stopped --> Active: activity resumed
-    Active --> Dying: removeView()
-    Dying --> [*]: doDie()
+    Active --> Dying: removeView
+    Dying --> [*]: doDie
 ```
 
 ### 25.4.2 scheduleTraversals() and Choreographer

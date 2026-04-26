@@ -4222,7 +4222,7 @@ adb shell cat /sys/kernel/debug/binder/state
 adb shell cat /sys/kernel/debug/binder/proc/<pid>/state
 ```
 
-### 9.10.2 Perfetto Tracing
+### 9.11.2 Perfetto Tracing
 
 `servicemanager` integrates with Perfetto for tracing:
 
@@ -4235,7 +4235,7 @@ adb shell cat /sys/kernel/debug/binder/proc/<pid>/state
 
 Every `addService`, `getService`, and `checkService` call is traced.
 
-### 9.10.3 service command
+### 9.11.3 service command
 
 The `service` shell command directly interacts with services:
 
@@ -4251,7 +4251,7 @@ adb shell service call SurfaceFlinger 1
 # 1 = FIRST_CALL_TRANSACTION (first method in ISurfaceComposer)
 ```
 
-### 9.10.4 Common Error Codes
+### 9.11.4 Common Error Codes
 
 | Error | Meaning |
 |-------|---------|
@@ -4262,7 +4262,7 @@ adb shell service call SurfaceFlinger 1
 | `UNKNOWN_TRANSACTION` | The server does not recognize the transaction code |
 | `FDS_NOT_ALLOWED` | File descriptors not allowed in this transaction |
 
-### 9.10.5 Diagnosing Binder Buffer Exhaustion
+### 9.11.5 Diagnosing Binder Buffer Exhaustion
 
 When a process's binder buffer fills up, you see errors like:
 
@@ -4288,7 +4288,7 @@ Common causes:
 3. **Large transactions:** Sending bitmaps or large data through Binder instead
    of using shared memory
 
-### 9.10.6 Tracing Binder Transactions with atrace
+### 9.11.6 Tracing Binder Transactions with atrace
 
 ```bash
 # Enable binder tracing
@@ -4300,7 +4300,7 @@ adb shell atrace --async_stop > trace.txt
 # View in Perfetto UI
 ```
 
-### 9.10.7 Monitoring Binder Proxy Counts
+### 9.11.7 Monitoring Binder Proxy Counts
 
 ```bash
 # Check per-UID proxy counts
@@ -4313,7 +4313,7 @@ adb shell cat /proc/<pid>/fd | wc -l  # rough approximation
 The proxy throttle watermarks (2000 low / 2250 warning / 2500 high) are
 configurable via system properties on debug builds.
 
-### 9.10.8 Using binder_exception_to_string
+### 9.11.8 Using binder_exception_to_string
 
 When debugging AIDL binder exceptions, the status code can be decoded:
 
@@ -4335,7 +4335,7 @@ level `status_t` return codes.
 
 ---
 
-## 9.11 Summary
+## 9.12 Summary
 
 ### Key Source Files
 

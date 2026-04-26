@@ -883,8 +883,8 @@ The Shell-side `Transitions` class is the master animation orchestrator. It impl
 ```mermaid
 stateDiagram-v2
     [*] --> PENDING: startTransition / requestTransition
-    PENDING --> READY: onTransitionReady(TransitionInfo)
-    READY --> ACTIVE: play(handler)
+    PENDING --> READY: onTransitionReady with TransitionInfo
+    READY --> ACTIVE: play with handler
     READY --> MERGED: merge into active
     ACTIVE --> [*]: finish
     MERGED --> [*]: parent finishes
@@ -1327,7 +1327,7 @@ stateDiagram-v2
     PINNED --> FULLSCREEN: Expand from PiP
     PINNED --> MULTI_WINDOW: PiP to split
 
-    MULTI_WINDOW --> FULLSCREEN: Exit split (drag divider / dismiss)
+    MULTI_WINDOW --> FULLSCREEN: Exit split - drag divider or dismiss
     MULTI_WINDOW --> PINNED: Split task enters PiP
 
     FREEFORM --> FULLSCREEN: Maximize / exit desktop

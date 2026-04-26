@@ -312,8 +312,8 @@ The lifecycle follows these phases:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> ProcessStart: NfcApplication.onCreate()
-    ProcessStart --> NfcServiceCreated: new NfcService()
+    [*] --> ProcessStart: NfcApplication.onCreate
+    ProcessStart --> NfcServiceCreated: new NfcService
     NfcServiceCreated --> BootTask: TASK_BOOT
     BootTask --> NfcOn: NFC enabled in Settings
     BootTask --> NfcOff: NFC disabled in Settings
@@ -321,8 +321,8 @@ stateDiagram-v2
     NfcTurningOff --> NfcOff: Shutdown complete
     NfcOff --> NfcTurningOn: TASK_ENABLE
     NfcTurningOn --> NfcOn: Init complete
-    NfcOn --> HwError: onHwErrorReported()
-    HwError --> NfcTurningOff: restartStack()
+    NfcOn --> HwError: onHwErrorReported
+    HwError --> NfcTurningOff: restartStack
 ```
 
 NfcService's state is tracked through the standard NfcAdapter state constants:
@@ -832,17 +832,17 @@ The HAL follows a strict lifecycle:
 ```mermaid
 stateDiagram-v2
     [*] --> Closed
-    Closed --> Opening: open(callback)
+    Closed --> Opening: open callback
     Opening --> Opened: OPEN_CPLT event
-    Opened --> CoreInit: coreInitialized()
+    Opened --> CoreInit: coreInitialized
     CoreInit --> Ready: POST_INIT_CPLT event
-    Ready --> PreDiscover: preDiscover()
+    Ready --> PreDiscover: preDiscover
     PreDiscover --> Discovering: PRE_DISCOVER_CPLT event
-    Ready --> Writing: write(nciCommand)
+    Ready --> Writing: write nciCommand
     Writing --> Ready: Command acknowledged
-    Ready --> Closing: close(type)
+    Ready --> Closing: close type
     Closing --> Closed: CLOSE_CPLT event
-    Ready --> PowerCycle: powerCycle()
+    Ready --> PowerCycle: powerCycle
     PowerCycle --> Closed: Cycle complete
 ```
 
@@ -1837,13 +1837,13 @@ transaction:
 ```mermaid
 stateDiagram-v2
     [*] --> IDLE
-    IDLE --> W4_SELECT: onHostCardEmulationActivated()
-    W4_SELECT --> W4_SERVICE: SELECT APDU received,\nresolve AID
-    W4_SERVICE --> XFER: Service bound,\nforward APDU
+    IDLE --> W4_SELECT: onHostCardEmulationActivated
+    W4_SELECT --> W4_SERVICE: SELECT APDU received,<br/>resolve AID
+    W4_SERVICE --> XFER: Service bound,<br/>forward APDU
     XFER --> XFER: Subsequent APDUs
-    XFER --> W4_SELECT: New SELECT APDU\n(different AID)
-    XFER --> IDLE: onHostCardEmulationDeactivated()
-    W4_SELECT --> IDLE: onHostCardEmulationDeactivated()
+    XFER --> W4_SELECT: New SELECT APDU,<br/>different AID
+    XFER --> IDLE: onHostCardEmulationDeactivated
+    W4_SELECT --> IDLE: onHostCardEmulationDeactivated
     W4_SERVICE --> IDLE: Service bind timeout
     IDLE --> POLLING_LOOP: Polling frames detected
     POLLING_LOOP --> W4_SELECT: Activated

@@ -1680,20 +1680,21 @@ cts/
 
 ### 55.6.2  Test Organization
 
-CTS organizes tests by Android API area.  Each directory under `cts/tests/`
-typically maps to a framework package or subsystem:
+CTS organizes tests by Android API area.  Most CTS device-side test packages
+live under `cts/tests/tests/`, and each directory there typically maps to a
+framework package or subsystem:
 
 | Directory | API Area |
 |-----------|----------|
-| `cts/tests/app/` | Activity, Service, ContentProvider |
-| `cts/tests/net/` | Networking APIs |
-| `cts/tests/media/` | Media codecs, player, recorder |
-| `cts/tests/security/` | Security/crypto APIs |
-| `cts/tests/permission/` | Permission model |
-| `cts/tests/widget/` | UI widgets |
-| `cts/tests/graphics/` | Graphics, Canvas, OpenGL |
+| `cts/tests/tests/app/` | Activity, Service, ContentProvider |
+| `cts/tests/tests/net/` | Networking APIs |
+| `cts/tests/tests/media/` | Media codecs, player, recorder |
+| `cts/tests/tests/security/` | Security/crypto APIs |
+| `cts/tests/netlegacy22.permission/` | Legacy permission model |
+| `cts/tests/tests/widget/` | UI widgets |
+| `cts/tests/tests/graphics/` | Graphics, Canvas, OpenGL |
 | `cts/tests/camera/` | Camera2 API |
-| `cts/tests/telecom/` | Telephony/telecom |
+| `cts/tests/tests/telecom/` | Telephony/telecom |
 | `cts/tests/accessibility/` | Accessibility services |
 
 Host-side tests under `cts/hostsidetests/` test behaviors that require

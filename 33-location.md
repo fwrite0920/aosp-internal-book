@@ -994,13 +994,13 @@ When the requested fix interval exceeds `GPS_POLLING_THRESHOLD_INTERVAL`
 ```mermaid
 stateDiagram-v2
     [*] --> Idle
-    Idle --> Navigating : setRequest(active)
-    Navigating --> FixObtained : onReportLocation()
+    Idle --> Navigating : setRequest active
+    Navigating --> FixObtained : onReportLocation
     FixObtained --> Hibernate : fixInterval > POLLING_THRESHOLD
     FixObtained --> Navigating : fixInterval <= POLLING_THRESHOLD
     Hibernate --> Navigating : AlarmManager wakeup
-    Navigating --> Idle : setRequest(inactive)
-    Navigating --> TimedOut : NO_FIX_TIMEOUT (60s)
+    Navigating --> Idle : setRequest inactive
+    Navigating --> TimedOut : NO_FIX_TIMEOUT 60s
     TimedOut --> Hibernate : retry
 ```
 
@@ -2145,13 +2145,13 @@ with two listening modes:
 ```mermaid
 stateDiagram-v2
     [*] --> STOPPED
-    STOPPED --> STARTED_ACTIVE : onStartUpdates()
+    STOPPED --> STARTED_ACTIVE : onStartUpdates
     STARTED_ACTIVE --> STARTED_PASSIVE : active timeout / location received
     STARTED_PASSIVE --> STARTED_ACTIVE : passive timeout, no location
-    STARTED_PASSIVE --> STARTED_PASSIVE : location received (stay passive)
-    STARTED_ACTIVE --> STOPPED : onStopUpdates()
-    STARTED_PASSIVE --> STOPPED : onStopUpdates()
-    STOPPED --> DESTROYED : onDestroy()
+    STARTED_PASSIVE --> STARTED_PASSIVE : location received, stay passive
+    STARTED_ACTIVE --> STOPPED : onStopUpdates
+    STARTED_PASSIVE --> STOPPED : onStopUpdates
+    STOPPED --> DESTROYED : onDestroy
     STARTED_ACTIVE --> FAILED : IOException
     STARTED_PASSIVE --> FAILED : IOException
 ```

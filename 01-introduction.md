@@ -758,7 +758,7 @@ graph TB
             JOB["JobSchedulerService<br/><i>(Background job management)</i>"]
             BATTERY["BatteryService<br/><i>(Battery monitoring)</i>"]
             STORAGE["StorageManagerService<br/><i>(storage/) - Volume management,<br/>encryption</i>"]
-            DEVICE["DevicePolicyManagerService<br/><i>(devicepolicy/) - Enterprise<br/>management, MDM)</i>"]
+            DEVICE["DevicePolicyManagerService<br/><i>(devicepolicy/) - Enterprise<br/>management, MDM</i>"]
         end
 
         subgraph Connectivity["Connectivity Services"]
@@ -2651,7 +2651,7 @@ graph TB
 
     subgraph Boot["At Boot"]
         APEXd["apexd daemon"]
-        Mount["Mount at<br/>/apex/<name>/"]
+        Mount["Mount at<br/>/apex/{name}/"]
     end
 
     APEXd --> APEX_Package
