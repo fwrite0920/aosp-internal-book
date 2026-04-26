@@ -881,7 +881,7 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-    ServiceCtor[Construct Service] --> OnStart[onStart()]
+    ServiceCtor[Construct Service] --> OnStart["onStart()"]
     OnStart --> Publish[Publish Binder/Local Service]
     Publish --> BootPhase[Receive Boot Phases]
     BootPhase --> UserEvents[Receive User Lifecycle]

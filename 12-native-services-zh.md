@@ -438,7 +438,7 @@ frameworks/native/services/inputflinger/
 
 ```mermaid
 flowchart LR
-    Kernel[/dev/input/eventX] --> EventHub
+    Kernel["/dev/input/eventX"] --> EventHub
     EventHub --> InputReader
     InputReader --> InputDispatcher
     InputDispatcher --> InputChannel

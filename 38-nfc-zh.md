@@ -74,7 +74,7 @@ graph TB
         LIB["libnfc-nci"]
     end
 
-    subgraph "HAL"
+    subgraph HAL_LAYER["HAL"]
         HAL["INfc AIDL HAL"]
         CB["INfcClientCallback"]
     end

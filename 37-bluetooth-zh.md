@@ -38,7 +38,7 @@ graph TB
         GD["Gabeldorsche 模块"]
     end
 
-    subgraph "HAL"
+    subgraph HAL_LAYER["HAL"]
         HAL["IBluetoothHci AIDL HAL"]
     end
 
