@@ -2,6 +2,7 @@
 
 import hashlib
 import logging
+import locale
 import re
 import time
 from html import unescape
@@ -45,6 +46,20 @@ def _hash_code(code: str) -> str:
     return hashlib.sha256(code.encode()).hexdigest()[:16]
 
 
+def _read_text(path: Path) -> str:
+    encodings = ("utf-8", locale.getpreferredencoding(False), "gbk")
+    seen: set[str] = set()
+    for encoding in encodings:
+        if not encoding or encoding in seen:
+            continue
+        seen.add(encoding)
+        try:
+            return path.read_text(encoding=encoding)
+        except UnicodeDecodeError:
+            continue
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
 class MermaidRenderer:
     """Batch Mermaid diagram renderer with file-based SVG cache."""
 
@@ -83,7 +98,7 @@ class MermaidRenderer:
             for hash_id, code in self._queue.items():
                 try:
                     svg = page.evaluate("code => window.renderDiagram(code)", code)
-                    (self._cache_dir / f"{hash_id}.svg").write_text(svg)
+                    (self._cache_dir / f"{hash_id}.svg").write_text(svg, encoding="utf-8")
                     rendered += 1
                 except Exception as e:
                     log.warning("Mermaid failed [%s]: %s", hash_id[:8], str(e)[:120])
@@ -101,7 +116,7 @@ class MermaidRenderer:
         h = _hash_code(code)
         svg_file = self._cache_dir / f"{h}.svg"
         if svg_file.exists():
-            return svg_file.read_text()
+            return _read_text(svg_file)
         return None
 
 
@@ -114,7 +129,7 @@ def replace_mermaid_blocks(html: str, cache_dir: Path) -> str:
         h = _hash_code(code)
         svg_file = cache_dir / f"{h}.svg"
         if svg_file.exists():
-            svg = svg_file.read_text()
+            svg = _read_text(svg_file)
             return f'<div class="mermaid-svg">{svg}</div>'
         return m.group(0)
 

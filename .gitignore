@@ -1,6 +1,8 @@
 # Build output
 /site/
 /docs/
+/site-zh/
+/docs-zh/
 
 # Python
 __pycache__/

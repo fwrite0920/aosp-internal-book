@@ -1,6 +1,15 @@
 services:
   serve:
     build: .
+    command: bash -lc "python3 tools/prepare_mkdocs_docs.py && mkdocs serve -a 0.0.0.0:8000"
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/book
+
+  serve-zh:
+    build: .
+    command: bash -lc "python3 tools/prepare_mkdocs_docs.py && mkdocs serve -f mkdocs-zh.yml -a 0.0.0.0:8000"
     ports:
       - "8000:8000"
     volumes:
@@ -8,13 +17,27 @@ services:
 
   build-site:
     build: .
-    command: mkdocs build
+    command: bash -lc "python3 tools/prepare_mkdocs_docs.py && mkdocs build"
+    volumes:
+      - .:/book
+
+  build-site-zh:
+    build: .
+    command: bash -lc "python3 tools/prepare_mkdocs_docs.py && mkdocs build -f mkdocs-zh.yml"
     volumes:
       - .:/book
 
   build-pdf:
     build: .
-    command: mkdocs build
+    command: bash -lc "python3 tools/prepare_mkdocs_docs.py && mkdocs build"
+    environment:
+      - MKDOCS_PDF=true
+    volumes:
+      - .:/book
+
+  build-pdf-zh:
+    build: .
+    command: bash -lc "python3 tools/prepare_mkdocs_docs.py && mkdocs build -f mkdocs-zh.yml"
     environment:
       - MKDOCS_PDF=true
     volumes:
@@ -22,7 +45,15 @@ services:
 
   build-epub:
     build: .
-    command: mkdocs build
+    command: bash -lc "python3 tools/prepare_mkdocs_docs.py && mkdocs build"
+    environment:
+      - MKDOCS_EPUB=true
+    volumes:
+      - .:/book
+
+  build-epub-zh:
+    build: .
+    command: bash -lc "python3 tools/prepare_mkdocs_docs.py && mkdocs build -f mkdocs-zh.yml"
     environment:
       - MKDOCS_EPUB=true
     volumes:

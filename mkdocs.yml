@@ -68,13 +68,13 @@ plugins:
       output: aosp-internals.pdf
       timeout: 30000
       stylesheets:
-        - docs/stylesheets/pdf.css
+        - stylesheets/pdf.css
   - epub-generate:
       enabled: !ENV [MKDOCS_EPUB, false]
       output: aosp-internals.epub
       timeout: 30000
       stylesheets:
-        - docs/stylesheets/epub.css
+        - stylesheets/epub.css
 
 extra_javascript:
   - javascripts/mermaid-zoom.js?v=4

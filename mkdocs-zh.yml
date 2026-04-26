@@ -1,0 +1,165 @@
+site_name: "AOSP Internals（中文版）"
+site_description: "Android Open Source Project 开发者指南（中文版）"
+site_url: "https://aospbooks.github.io/aosp-internal-book/zh/"
+docs_dir: "docs-zh"
+site_dir: "site-zh"
+
+theme:
+  name: material
+  custom_dir: overrides
+  favicon: favicon.png
+  logo: favicon.png
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.indexes
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+  palette:
+    - scheme: default
+      primary: green
+      accent: light green
+      toggle:
+        icon: material/brightness-7
+        name: 切换到深色模式
+    - scheme: slate
+      primary: green
+      accent: light green
+      toggle:
+        icon: material/brightness-4
+        name: 切换到浅色模式
+  font:
+    text: Roboto
+    code: Roboto Mono
+
+markdown_extensions:
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets:
+      base_path:
+        - .
+      check_paths: true
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - admonition
+  - pymdownx.details
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+      toc_depth: 3
+
+plugins:
+  - search
+  - pdf-generate:
+      enabled: !ENV [MKDOCS_PDF, false]
+      concurrency: 8
+      output: aosp-internals-zh.pdf
+      timeout: 30000
+      stylesheets:
+        - stylesheets/pdf.css
+  - epub-generate:
+      enabled: !ENV [MKDOCS_EPUB, false]
+      output: aosp-internals-zh.epub
+      timeout: 30000
+      stylesheets:
+        - stylesheets/epub.css
+
+extra_javascript:
+  - javascripts/mermaid-zoom.js?v=4
+
+extra_css:
+  - stylesheets/mermaid-zoom.css?v=4
+
+nav:
+  - 首页: index-zh.md
+  - "第 I 部分：入门":
+    - "前言": 00-frontmatter-zh.md
+    - "1. 介绍": 01-introduction-zh.md
+    - "2. 源码与构建系统": 02-source-and-build-zh.md
+    - "3. Feature Flags（aconfig）": 03-feature-flags-zh.md
+  - "第 II 部分：内核与启动":
+    - "4. 启动与 Init": 04-boot-and-init-zh.md
+    - "5. 内核": 05-kernel-zh.md
+    - "6. 系统属性": 06-system-properties-zh.md
+  - "第 III 部分：Native 基础":
+    - "7. Bionic 与 Linker": 07-bionic-and-linker-zh.md
+    - "8. 内存管理": 08-memory-management-zh.md
+    - "9. Binder IPC": 09-binder-ipc-zh.md
+    - "10. HAL": 10-hal-zh.md
+    - "11. NDK": 11-ndk-zh.md
+  - "第 IV 部分：Native 服务与媒体":
+    - "12. Native Services": 12-native-services-zh.md
+    - "13. 图形与渲染管线": 13-graphics-render-pipeline-zh.md
+    - "14. 动画系统": 14-animation-system-zh.md
+    - "15. 音频系统": 15-audio-system-zh.md
+    - "16. 媒体与相机": 16-media-and-camera-zh.md
+    - "17. 传感器": 17-sensors-zh.md
+  - "第 V 部分：运行时":
+    - "18. ART Runtime": 18-art-runtime-zh.md
+    - "19. Native Bridge": 19-native-bridge-zh.md
+  - "第 VI 部分：Framework 核心":
+    - "20. system_server": 20-system-server-zh.md
+    - "21. Intent 系统": 21-intent-system-zh.md
+    - "22. Activity 与窗口管理": 22-activity-and-window-zh.md
+    - "23. 窗口系统": 23-window-system-zh.md
+    - "24. 显示系统": 24-display-system-zh.md
+    - "25. View 系统": 25-view-system-zh.md
+  - "第 VII 部分：Framework 服务":
+    - "26. Package Manager": 26-package-manager-zh.md
+    - "27. Content Providers": 27-content-providers-zh.md
+    - "28. Notifications": 28-notifications-zh.md
+    - "29. 电源管理": 29-power-management-zh.md
+    - "30. 后台任务": 30-background-tasks-zh.md
+    - "31. 多用户": 31-multi-user-zh.md
+    - "32. 账户与同步": 32-account-sync-zh.md
+    - "33. 定位": 33-location-zh.md
+    - "34. 存储": 34-storage-zh.md
+  - "第 VIII 部分：连接能力":
+    - "35. 网络": 35-networking-zh.md
+    - "36. Telephony": 36-telephony-zh.md
+    - "37. 蓝牙": 37-bluetooth-zh.md
+    - "38. NFC": 38-nfc-zh.md
+    - "39. USB 与 ADB": 39-usb-adb-zh.md
+  - "第 IX 部分：安全":
+    - "40. 安全": 40-security-zh.md
+    - "41. Credential Manager": 41-credential-manager-zh.md
+    - "42. DRM": 42-drm-zh.md
+  - "第 X 部分：UI Framework":
+    - "43. Widgets 与 RemoteViews": 43-widgets-remoteviews-zh.md
+    - "44. WebView": 44-webview-zh.md
+    - "45. 无障碍": 45-accessibility-zh.md
+    - "46. 国际化": 46-internationalization-zh.md
+  - "第 XI 部分：系统应用":
+    - "47. SystemUI": 47-systemui-zh.md
+    - "48. Launcher3": 48-launcher3-zh.md
+    - "49. Settings": 49-settings-app-zh.md
+  - "第 XII 部分：AI 与设备":
+    - "50. AI 与 AppFunctions": 50-ai-appfunctions-zh.md
+    - "51. Companion 与 Virtual Devices": 51-companion-virtual-device-zh.md
+  - "第 XIII 部分：基础设施":
+    - "52. Mainline Modules": 52-mainline-modules-zh.md
+    - "53. OTA Updates": 53-ota-updates-zh.md
+    - "54. Virtualization": 54-virtualization-zh.md
+    - "55. Testing": 55-testing-zh.md
+    - "56. Debugging Tools": 56-debugging-tools-zh.md
+  - "第 XIV 部分：设备支持":
+    - "57. 架构支持": 57-architecture-support-zh.md
+    - "58. Emulator": 58-emulator-zh.md
+    - "59. Device Policy": 59-device-policy-zh.md
+    - "60. Automotive / TV / Wear": 60-automotive-tv-wear-zh.md
+    - "61. Print Services": 61-print-services-zh.md
+    - "62. Camera2 Pipeline": 62-camera2-pipeline-zh.md
+  - "第 XV 部分：实践":
+    - "63. Custom ROM 指南": 63-custom-rom-zh.md

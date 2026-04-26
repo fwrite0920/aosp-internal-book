@@ -6,11 +6,20 @@ on:
     paths:
       - '**.md'
       - '**.png'
+      - '**.svg'
       - 'mkdocs.yml'
+      - 'mkdocs-zh.yml'
       - 'docs/**'
+      - 'docs-zh/**'
       - 'stylesheets/**'
       - 'javascripts/**'
       - 'overrides/**'
+      - 'docker-compose.yml'
+      - 'serve.sh'
+      - 'tools/**'
+      - 'mkdocs-mermaid-renderer/**'
+      - 'mkdocs-pdf-generate/**'
+      - 'mkdocs-epub-generate/**'
       - '.github/workflows/deploy-pages.yml'
   workflow_dispatch:
 
@@ -43,24 +52,29 @@ jobs:
           pip install ./mkdocs-mermaid-renderer
           pip install ./mkdocs-pdf-generate ./mkdocs-epub-generate
 
-      - name: Create docs symlinks
-        run: |
-          mkdir -p docs
-          for f in [0-9]*.md A-*.md B-*.md index.md favicon.png; do
-            ln -sf "../$f" "docs/$f"
-          done
-          echo "Linked $(ls docs/ | wc -l) files"
+      - name: Prepare MkDocs docs directories
+        run: python3 tools/prepare_mkdocs_docs.py
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
 
-      - name: Build site
+      - name: Build English site
         run: mkdocs build
+
+      - name: Build Chinese site
+        run: mkdocs build -f mkdocs-zh.yml
+
+      - name: Merge Pages artifact
+        run: |
+          rm -rf site-pages
+          mkdir -p site-pages/zh
+          cp -a site/. site-pages/
+          cp -a site-zh/. site-pages/zh/
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ./site
+          path: ./site-pages
 
   deploy:
     needs: build

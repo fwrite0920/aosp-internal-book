@@ -152,7 +152,7 @@ class PdfGeneratePlugin(BasePlugin):
         for css_path in self.config["stylesheets"]:
             p = self._config_dir / css_path
             if p.exists():
-                self._extra_css += p.read_text() + "\n"
+                self._extra_css += p.read_text(encoding="utf-8") + "\n"
         log.info("[pdf] Plugin enabled (concurrency=%d)", self.config["concurrency"])
 
     def on_page_markdown(self, markdown, page, config, files, **kwargs):
@@ -400,7 +400,7 @@ body {{
             return None
 
         if cover_source.endswith(".svg"):
-            svg_data = cover_file.read_text()
+            svg_data = cover_file.read_text(encoding="utf-8")
             html = f"""\
 <!DOCTYPE html><html><head><meta charset="utf-8">
 <style>

@@ -4,7 +4,9 @@
 
 A comprehensive technical book covering the full AOSP stack — from kernel to apps — with every claim referencing real source code file paths and line numbers.
 
-**Read online:** <https://aospbooks.github.io/aosp-internal-book/>
+**Read online (English):** <https://aospbooks.github.io/aosp-internal-book/>
+
+**Read online (中文):** <https://aospbooks.github.io/aosp-internal-book/zh/>
 
 > **Status: Under Review**
 > All chapters are currently being reviewed for technical accuracy, completeness, and clarity. Content may change. If you spot errors, missing details, or have suggestions, please [open an issue](https://github.com/nicewook/aosp-knowledge/issues) or submit a pull request — feedback from AOSP developers and enthusiasts is very welcome.
@@ -96,10 +98,13 @@ A comprehensive technical book covering the full AOSP stack — from kernel to a
 
 ```bash
 ./serve.sh           # start (http://localhost:8000)
+./serve.sh zh        # start Chinese site (http://localhost:8000)
 ./serve.sh off       # stop
 ./serve.sh status    # check if running
 ./serve.sh pdf       # build PDF → site/aosp-internals.pdf
 ./serve.sh epub      # build EPUB → site/aosp-internals.epub
+./serve.sh zh-pdf    # build Chinese PDF → site-zh/aosp-internals-zh.pdf
+./serve.sh zh-epub   # build Chinese EPUB → site-zh/aosp-internals-zh.epub
 ```
 
 The `pdf` command stops any running server, then builds all 64 chapters into a
@@ -108,28 +113,43 @@ single PDF with rendered Mermaid diagrams (takes a while — uses Playwright/Chr
 The `epub` command works the same way, producing an EPUB3 file with rendered
 Mermaid diagrams suitable for Apple Books, Google Play Books, and other readers.
 
+The Chinese commands use a separate MkDocs configuration, separate navigation,
+and separate outputs. They do not overwrite the English site or English
+ebook artifacts.
+
 ### Without Docker
 
 ```bash
 # Install (one-time)
 pip install mkdocs-material pymdown-extensions
+pip install ./mkdocs-mermaid-renderer ./mkdocs-pdf-generate ./mkdocs-epub-generate
 
-# Create symlinks (one-time)
-mkdir -p docs
-for f in [0-9]*.md A-*.md B-*.md index.md; do ln -sf "../$f" "docs/$f"; done
+# Prepare English + Chinese docs directories
+python3 tools/prepare_mkdocs_docs.py
 
 # Start
 mkdocs serve                       # http://127.0.0.1:8000
+mkdocs serve -f mkdocs-zh.yml      # http://127.0.0.1:8000 (Chinese)
 
 # Build static site
 mkdocs build                       # output in site/
+mkdocs build -f mkdocs-zh.yml      # output in site-zh/
+
+# Build Chinese PDF / EPUB
+MKDOCS_PDF=true mkdocs build -f mkdocs-zh.yml
+MKDOCS_EPUB=true mkdocs build -f mkdocs-zh.yml
 ```
 
 Open **http://localhost:8000** — chapters in the sidebar, Mermaid renders live, hot-reload on edits.
 
 ## GitHub Actions
 
-Tests `mkdocs build` on push to `main` and PRs (~2 min).
+Tests both English and Chinese `mkdocs build` on push to `main` and PRs.
+
+GitHub Pages deploys:
+
+- English site at `/`
+- Chinese site at `/zh/`
 
 ## Project Structure
 
@@ -139,16 +159,30 @@ A-appendix-key-files.md    Appendix A
 B-appendix-glossary.md     Appendix B
 index.md                   Website homepage
 mkdocs.yml                 MkDocs config (Material theme + Mermaid)
-docs/                      Symlinks for MkDocs (gitignored)
+mkdocs-zh.yml              Chinese MkDocs config
+docs/                      English docs links for MkDocs (gitignored)
+docs-zh/                   Chinese docs links for MkDocs (gitignored)
 mkdocs-mermaid-renderer/   Shared Mermaid SVG renderer (Playwright + cache)
 mkdocs-pdf-generate/       MkDocs plugin: PDF export
 mkdocs-epub-generate/      MkDocs plugin: EPUB export
 Dockerfile                 python:3.12-slim + Playwright + MkDocs plugins
-docker-compose.yml         serve / build-site / build-pdf / build-epub
+docker-compose.yml         English + Chinese serve/build targets
 CLAUDE.md                  Project rules for AI agents
 .claude/skills/            book-writer
 .github/workflows/         CI: mkdocs build test
+tools/prepare_mkdocs_docs.py
+                            Generates English + Chinese docs link dirs
 ```
+
+## Adding New Chinese Chapters
+
+When you add a new translated chapter, update both:
+
+1. the translated `*-zh.md` file itself
+2. `mkdocs-zh.yml` navigation
+
+The Chinese site uses a separate nav tree on purpose, so English and Chinese
+can evolve independently without breaking each other.
 
 ## License
 

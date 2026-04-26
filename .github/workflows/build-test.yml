@@ -6,7 +6,18 @@ on:
     paths:
       - '**.md'
       - '**.png'
+      - '**.svg'
       - 'mkdocs.yml'
+      - 'mkdocs-zh.yml'
+      - 'docker-compose.yml'
+      - 'serve.sh'
+      - 'tools/**'
+      - 'stylesheets/**'
+      - 'javascripts/**'
+      - 'overrides/**'
+      - 'mkdocs-mermaid-renderer/**'
+      - 'mkdocs-pdf-generate/**'
+      - 'mkdocs-epub-generate/**'
       - '.github/workflows/build-test.yml'
   pull_request:
     branches: [main]
@@ -26,21 +37,24 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install MkDocs
-        run: pip install mkdocs-material pymdown-extensions
-
-      - name: Create docs symlinks
+      - name: Install MkDocs and local plugins
         run: |
-          mkdir -p docs
-          for f in [0-9]*.md A-*.md B-*.md index.md favicon.png; do
-            ln -sf "../$f" "docs/$f"
-          done
-          echo "Linked $(ls docs/ | wc -l) files"
+          pip install mkdocs-material pymdown-extensions
+          pip install ./mkdocs-mermaid-renderer
+          pip install ./mkdocs-pdf-generate ./mkdocs-epub-generate
 
-      - name: Build site
+      - name: Prepare MkDocs docs directories
+        run: python3 tools/prepare_mkdocs_docs.py
+
+      - name: Build English site
         run: mkdocs build 2>&1 | tail -20
+
+      - name: Build Chinese site
+        run: mkdocs build -f mkdocs-zh.yml 2>&1 | tail -20
 
       - name: Verify output
         run: |
-          echo "Pages: $(find site -name '*.html' | wc -l)"
-          echo "Size: $(du -sh site/ | cut -f1)"
+          echo "English pages: $(find site -name '*.html' | wc -l)"
+          echo "English size: $(du -sh site/ | cut -f1)"
+          echo "Chinese pages: $(find site-zh -name '*.html' | wc -l)"
+          echo "Chinese size: $(du -sh site-zh/ | cut -f1)"
