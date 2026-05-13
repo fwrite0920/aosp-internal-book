@@ -1,10 +1,5 @@
 # 第 1 章：引言
 
-> *“Android 是一个开放平台。任何人都可以使用它。这正是它的魅力所在。”*
-> -- Android 联合创始人 Andy Rubin
-
----
-
 ## 1.1 为什么要写这本书
 
 Android Open Source Project 是人类历史上规模最大、复杂度最高、影响力最深的开源项目之一。它驱动着三十多亿台活跃设备，覆盖手机、平板、电视、汽车、可穿戴设备和嵌入式系统。它的代码库横跨数千个 Git 仓库，包含数亿行代码。它的架构将用 C 编写的 Linux 内核，与 Java/Kotlin 应用框架连接在一起，中间由原生 C++ 服务、自定义 IPC 机制 Binder，以及专门打造的运行时 ART 串联。
@@ -226,7 +221,7 @@ graph TB
 
 ### 1.3.2 第 1 层：Linux 内核
 
-Android 运行在 Linux 内核之上。到 Android 15 为止，内核基于 **Linux 6.x Long-Term Support（LTS）** 分支，并叠加通过 **Android Common Kernel（ACK）** 和 **Generic Kernel Image（GKI）** 计划维护的 Android 特定补丁。
+Android 运行在 Linux 内核之上。截至 Android 16，内核基于 **Linux 6.x Long-Term Support（LTS）** 分支（Android 16 GKI 为 6.12），并叠加通过 **Android Common Kernel（ACK）** 和 **Generic Kernel Image（GKI）** 计划维护的 Android 特定补丁。
 
 #### Android 特定内核能力
 
@@ -1716,7 +1711,7 @@ Google 是 AOSP 的主要维护者。绝大多数 framework 代码、runtime 改
 
 **Mainline 模块：**
 
-- Google 开发并维护可通过 Play Store 独立更新的 Mainline 模块。到 Android 15，已有 30 多个模块被“mainline 化”，包括：
+- Google 开发并维护可通过 Play Store 独立更新的 Mainline 模块。截至 Android 16，已有 30 多个模块被“mainline 化”，包括：
   - Connectivity（WiFi、Bluetooth、Tethering、DNS）
   - Media（codec、extractor）
   - Permissions
@@ -1842,7 +1837,7 @@ AOSP 的 Gerrit 实例（android-review.googlesource.com）接受外部贡献，
 
 ## 1.6 AOSP 版本历史
 
-自首次发布以来，Android 已发生巨大演进。下表记录了从 Android 1.0 到 Android 15 的主要版本。
+自首次发布以来，Android 已发生巨大演进。下表记录了从 Android 1.0 到 Android 16 的主要版本。
 
 ### 1.6.1 完整版本表
 
@@ -1882,6 +1877,7 @@ AOSP 的 Gerrit 实例（android-review.googlesource.com）接受外部贡献，
 | **13** | 33 | **Android 13** | 2022 年 8 月 | 应用级语言偏好、主题图标、通知权限、photo picker、predictive back gesture、可编程 shader（AGSL）。 |
 | **14** | 34 | **Android 14** | 2023 年 10 月 | 语法屈折 API、区域偏好、path interop、credential manager、health connect、Ultra HDR、无损 USB 音频，以及更高的平台稳定性。 |
 | **15** | 35 | **Android 15（Vanilla Ice Cream）** | 2024 年 | 应用归档、局部屏幕共享、卫星连接 API、增强 PDF 渲染、**AV1 软件 codec**、NFC 支付改进、private space（用于敏感应用的独立 profile）、更强的录屏 / 投屏安全保护、Health Connect 扩展。 |
+| **16** | 36 | **Android 16（Baklava）** | 2025 年 6 月 | **强制支持 16 KB 页大小**（面向 API 36 的新应用）。**Live Updates** 通知 API 用于持续任务。**预测性返回手势** 对面向 API 36 的应用默认开启。**全面强制边到边显示**。**自适应布局** 要求。Linux **6.12** LTS GKI。持续的 Mainline 模块扩展。Performance Class 16。 |
 
 ### 1.6.2 架构里程碑
 
@@ -1926,6 +1922,9 @@ timeline
                           : Health Connect
         2024 (15)        : ART Mainline updates
                           : Private Space
+        2025 (16)        : 16 KB page size
+                          : Live Updates API
+                          : Adaptive layouts mandate
 ```
 
 ### 1.6.3 API Level 增长
@@ -1942,6 +1941,7 @@ Android SDK 中公开 API 的数量一直在快速增长：
 | API 29（10） | ~30,000 | 深色主题、Scoped Storage、BiometricPrompt |
 | API 33（13） | ~35,000 | Photo picker、应用级语言、主题图标 |
 | API 35（15） | ~40,000+ | Satellite API、Private space、Health Connect |
+| API 36（16） | ~45,000+ | 16 KB page size、Live Updates、Predictive back |
 
 每个 API level 都严格包含前一个版本的全部能力（极少数废弃 API 最终会被移除）。这些 API 由 Metalava 维护的签名文件定义：
 
@@ -2375,7 +2375,7 @@ graph TB
     style Mainline_Model fill:#e8f5e9,stroke:#2e7d32
 ```
 
-到 Android 15，Mainline 模块包括：
+到 Android 16，Mainline 模块包括：
 
 | 模块 | 类型 | 更新内容 |
 |---|---|---|
@@ -2756,4 +2756,8 @@ $ source build/envsetup.sh       # Set up build environment
 ---
 
 *下一章：第 2 章 -- 搭建开发环境*
+
+*
+
+ 搭建开发环境*
 

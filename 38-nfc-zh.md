@@ -1,7 +1,5 @@
 # 第 38 章：NFC 近场通信
 
-> *“NFC 是一种几乎看不见的握手：轻触即可支付、碰一碰即可分享链接、刷一下即可开门。Android 把 13.56 MHz 的短距离无线链路扩展成了一整套平台能力，覆盖标签读写、主机卡模拟、安全元件，以及 FeliCa 等区域性生态。”*
-
 NFC 是 Android 平台里一个很有代表性的“小入口、大系统”子系统。对应用来说，它可能只是 `NfcAdapter`、一个 tag intent，或者一个 `HostApduService`；但在系统内部，它同时牵涉 AIDL HAL、`libnfc-nci`、JNI、`NfcService`、标签分发、AID 路由、SE、Reader Mode 和 HCE。本章按这条链路梳理 Android NFC 栈的关键实现。
 
 ---

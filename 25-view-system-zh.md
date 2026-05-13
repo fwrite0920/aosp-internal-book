@@ -1,7 +1,5 @@
 # 第 25 章：View 系统与输入分发
 
-> *“View 层级就是每一个 Android 应用中每一个像素上演的舞台。理解 measure-layout-draw 管线，就等于理解用户真正看到的内容。”*
-
 Android **View 系统** 是运行在应用进程内的客户端渲染与事件处理框架，它把声明式 XML，或者代码动态构建出来的界面，转化为屏幕上可交互的像素。与第 23 章和第 24 章分析的 WindowManagerService、DisplayManagerService 这类服务端系统组件不同，View 系统主要存在于应用进程内，并通过桥接对象 `ViewRootImpl` 与系统服务交互。
 
 每一次按钮点击、滚动手势、键盘导航、无障碍查询，都会穿过 View 层级。每一帧动画都由 `Choreographer` 编排，经由 `ViewRootImpl.performTraversals()` 串起 measure、layout、draw 三阶段，最终由 HWUI 在独立渲染线程上完成光栅化与 GPU 提交。

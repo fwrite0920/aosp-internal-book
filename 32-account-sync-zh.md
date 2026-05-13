@@ -1,7 +1,5 @@
 # 第 32 章：账户与同步框架
 
-> *“Account 与 Sync 框架是 Android 里最常被忽视、却最持续运转的基础设施之一。邮件为什么会自动更新、联系人为什么能跨设备同步、日历为什么会在后台悄悄刷新，背后都离不开它。”*
-
 Android 的账户与同步框架由两个强耦合子系统组成：`AccountManager` 负责账户对象、认证器、密码与 token 管理；`SyncManager` 负责后台同步的调度、执行、退避和持久化状态。它们共同支撑了邮件、联系人、日历、云盘、企业身份和各类三方云服务的数据同步。本章从应用侧 `AccountManager` / `ContentResolver.requestSync()` API 出发，沿着 `AccountManagerService`、`SyncManager`、SQLite / XML / Proto 持久化和 JobScheduler 集成，一路梳理到系统内部实现。
 
 ---

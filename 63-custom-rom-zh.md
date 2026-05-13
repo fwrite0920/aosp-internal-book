@@ -1,7 +1,5 @@
 # 第 63 章：Custom ROM 指南
 
-> *“开源真正的价值，不是你能读代码，而是你能修改它，并交付一套完全属于你自己的系统。”*
-
 本章是全书的收官章节。前面关于 build system、init、HAL、system service、SystemUI、emulator、安全、签名和 OTA 的内容，到这里会被串成一条完整链路：从零开始构建、定制、签名并分发一套可运行的 Android Custom ROM。
 
 目标设备选择 AOSP Goldfish emulator（`sdk_phone64_x86_64`）。这是一个有意的取舍，因为任何读者都可以在自己的工作站上复现，不依赖真实硬件。这里演示的 device tree、overlay、预装应用、系统服务、boot animation、内核和 HAL 修改，绝大多数方法同样适用于实体设备；区别主要在 `BoardConfig.mk`、vendor blob 和 kernel image 上。

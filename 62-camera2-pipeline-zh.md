@@ -1,7 +1,5 @@
 # 第 62 章：Camera2 Pipeline 深入剖析
 
-> *“Camera2 API 是 Android 里最贴近硬件的 API 之一。它本质上是一条 request-result 管线：在单帧时限内，把配置、元数据和像素 buffer 穿过三层进程边界，最终送进 vendor ISP 和 sensor。”*
-
 相机子系统是 AOSP 中最复杂、也最讲究时延和吞吐的管线之一。一次拍照可能同时涉及几十上百个 metadata key、多个输出 surface、3A（AE / AF / AWB）收敛循环、ISP 配置、多帧降噪和 HDR 合成，而且这些步骤要跨越 Java framework、native `CameraService`、AIDL/HIDL HAL，以及厂商硬件协同完成。
 
 本章从应用侧 `CameraManager` 出发，一路向下跟踪到 `CameraService`、`CameraDeviceClient`、`Camera3Device` 和 camera HAL，再顺着 `CaptureResult`、buffer 和 callback 回到应用。重点不是“怎么写一个拍照 Demo”，而是把 Camera2 的请求提交、流配置、metadata 映射、结果回传和多摄扩展机制整条链路讲清楚。
