@@ -778,6 +778,18 @@ graph LR
 
 ADPF 允许应用与系统建立 hint session，把每帧或每个工作周期的耗时目标回报给 HAL，让 HAL 动态做性能/能耗平衡。这对游戏、渲染和高性能交互尤为重要。
 
+#### 性能提示会话模型（Hint Session）
+
+ADPF hint session 以一组持续运行的工作负载为单位，维护目标耗时、实际耗时和调度反馈。
+
+#### 会话提示（Session Hint）
+
+Session hint 表达应用或 framework 对当前工作负载的性能意图，供 HAL 在短时间窗口内调整策略。
+
+#### 快速消息队列通道（FMQ）
+
+FMQ 通道用于降低高频性能反馈的跨进程开销，让 duration 和 hint 更新可以更轻量地进入 HAL。
+
 ### 29.8.7 CPU 与 GPU Headroom
 
 Headroom API 让调用方知道还有多少性能余量，帮助避免“总是顶满频率”的粗暴做法。
@@ -987,204 +999,13 @@ adb shell dumpsys power
 adb logcat | grep -i suspend
 ```
 
-## 29.11 动手实践（Try It）
+## 29.11 UsageStats and Screen Time
 
-### 29.11.1 实验 1：观察 WakeLocks
-
-```bash
-# 在设备上
-adb shell dumpsys power
-adb shell dumpsys batterystats | grep Wake
-```
-
-### 29.11.2 实验 2：监控电源状态切换
-
-```bash
-# 终端 1
-adb logcat -s PowerManagerService DisplayPowerController
-
-# 终端 2
-# 按电源键观察状态切换
-```
-
-### 29.11.3 实验 3：强制 Device Idle（Doze）
-
-```bash
-# 保证屏幕熄灭且未充电
-adb shell dumpsys deviceidle step
-adb shell dumpsys deviceidle get deep
-adb shell dumpsys deviceidle unforce
-```
-
-### 29.11.4 实验 4：查看 App Standby Buckets
-
-```bash
-# 列出全部 app bucket
-adb shell am get-standby-bucket
-
-# 查看指定包
-adb shell am get-standby-bucket com.example.app
-
-# 强制设置 bucket
-adb shell am set-standby-bucket com.example.app rare
-```
-
-### 29.11.5 实验 5：检查 Battery Stats
-
-```bash
-# 重置统计
-adb shell dumpsys batterystats --reset
-
-# 使用设备一段时间后导出
-adb shell dumpsys batterystats
-
-# 生成 Battery Historian 用 checkin 格式
-adb shell dumpsys batterystats --checkin
-```
-
-### 29.11.6 实验 6：监控 Thermal 状态
-
-```bash
-adb shell dumpsys thermalservice
-adb shell cmd thermalservice override-status 3
-adb shell cmd thermalservice reset
-```
-
-### 29.11.7 实验 7：Power HAL 交互
-
-```bash
-# dump power HAL
-adb shell dumpsys android.hardware.power.IPower/default
-```
-
-### 29.11.8 实验 8：查看 Suspend Blockers
-
-```bash
-adb shell dumpsys power
-adb shell cat /sys/kernel/debug/wakeup_sources
-```
-
-### 29.11.9 实验 9：ADPF Hint Session
-
-```bash
-adb shell dumpsys android.hardware.power.IPower/default
-adb logcat | grep -i adpf
-```
-
-### 29.11.10 实验 10：观察 CPU 频率
-
-```bash
-# 查看所有 CPU 当前频率
-adb shell cat /sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq
-
-# 观察频率变化
-adb shell watch -n 0.5 cat /sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq
-
-# 查看 governor
-adb shell cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
-```
-
-### 29.11.11 实验 11：追踪 Power 事件
-
-```bash
-adb shell atrace -c -b 4096 power sched freq idle
-```
-
-### 29.11.12 实验 12：模拟电池条件
-
-```bash
-adb shell dumpsys battery unplug
-adb shell dumpsys battery set level 15
-adb shell dumpsys battery set status 3
-adb shell dumpsys battery reset
-```
-
-### 29.11.13 实验 13：Battery Saver 测试
-
-```bash
-adb shell settings put global low_power 1
-adb shell settings put global low_power 0
-adb shell settings put global low_power_trigger_level 20
-adb shell settings get global low_power
-```
-
-### 29.11.14 实验 14：Kernel Wakelock 分析
-
-```bash
-# framework wakelock
-adb shell dumpsys power
-
-# kernel wakelock / wakeup source
-adb shell cat /sys/kernel/debug/wakeup_sources
-adb shell cat /d/wakeup_sources
-```
-
-### 29.11.15 实验 15：显示电源状态
-
-```bash
-adb shell dumpsys display
-adb shell settings get system screen_off_timeout
-```
-
-### 29.11.16 实验 16：Power Groups（多显示）
-
-```bash
-adb shell dumpsys power
-```
-
-关注其中每个 group 的：
-
-- group ID
-- wakefulness
-- last wake/sleep time
-- wake lock summary
-- user activity summary
-
-### 29.11.17 实验 17：探索 `DeviceIdleController`
-
-```bash
-adb shell dumpsys deviceidle
-adb shell dumpsys deviceidle force-idle deep
-adb shell dumpsys deviceidle unforce
-adb shell dumpsys deviceidle whitelist
-```
-
-### 29.11.18 实验 18：监控 Power HAL 交互
-
-```bash
-adb logcat | grep -i powerhal
-adb shell dumpsys android.hardware.power.IPower/default
-```
-
-### 29.11.19 实验 19：监控 ADPF Session
-
-```bash
-adb logcat | grep -i adpf
-```
-
-### 29.11.20 实验 20：综合电源审计
-
-```bash
-#!/bin/bash
-echo "=== power ==="
-adb shell dumpsys power
-echo "=== batterystats ==="
-adb shell dumpsys batterystats | head -200
-echo "=== thermal ==="
-adb shell dumpsys thermalservice
-echo "=== deviceidle ==="
-adb shell dumpsys deviceidle
-echo "=== standby buckets ==="
-adb shell am get-standby-bucket
-```
-
-## 29.12 UsageStats 与 Screen Time
-
-### 29.12.1 架构概览
+### 29.11.1 架构概览
 
 `UsageStatsService` 虽然不总被直觉地归入“电源管理”，但它为 App Standby、Screen Time、Digital Wellbeing、App launch prediction 等策略提供关键输入，因此它与续航治理密不可分。
 
-### 29.12.2 服务初始化
+### 29.11.2 服务初始化
 
 服务初始化时会：
 
@@ -1193,7 +1014,7 @@ adb shell am get-standby-bucket
 - 初始化 `AppTimeLimitController`
 - 注册 package、time change、user 切换等监听
 
-### 29.12.3 Usage 事件类型
+### 29.11.3 Usage 事件类型
 
 常见事件包括：
 
@@ -1205,15 +1026,15 @@ adb shell am get-standby-bucket
 
 这些事件最终既可供应用查询，也会反哺系统策略。
 
-### 29.12.4 Usage Source 配置
+### 29.11.4 Usage Source 配置
 
 系统支持多种 usage source 配置，决定 bucket 和 usage 统计更依赖 task root 还是 component 级别事件。
 
-### 29.12.5 按用户存储 Usage 数据
+### 29.11.5 按用户存储 Usage 数据
 
 Usage 数据是 per-user 存储的，数据库分时间粒度维护多个 interval 文件。系统会定期 flush 到磁盘，避免频繁 I/O。
 
-### 29.12.6 `AppTimeLimitController`
+### 29.11.6 `AppTimeLimitController`
 
 这是 Digital Wellbeing “应用计时器”的核心。它跟踪 app 前台时长，并在预算耗尽时通过回调触发“时间到了”。
 
@@ -1232,19 +1053,19 @@ sequenceDiagram
     ATLC->>DW: PendingIntent callback
 ```
 
-### 29.12.7 内核集成
+### 29.11.7 内核集成
 
 UsageStatsService 还会通过 `/proc/uid_procstat/set` 等路径把 UID 前后台状态回写内核计数器，以帮助 battery attribution 更准确地区分 foreground / background CPU 时间。
 
-### 29.12.8 Standby Bucket 变更监听
+### 29.11.8 Standby Bucket 变更监听
 
 当 app idle/bucket 变化时，UsageStats 会记录专门事件，既可供查询，也用于系统策略追踪。
 
-### 29.12.9 应用启动预测
+### 29.11.9 应用启动预测
 
 系统会维护近期组件使用时间与全局最近使用图，用于预测 app 可能的下次启动时间，帮助 standby 优化与潜在预热。
 
-### 29.12.10 查询 Usage 数据
+### 29.11.10 查询 Usage 数据
 
 主要接口包括：
 
@@ -1257,7 +1078,7 @@ UsageStatsService 还会通过 `/proc/uid_procstat/set` 等路径把 UID 前后�
 | `queryEventStats()` | `List<EventStats>` | 事件统计 |
 | `getAppStandbyBucket()` | `int` | 当前 app bucket |
 
-### 29.12.11 Digital Wellbeing 集成
+### 29.11.11 Digital Wellbeing 集成
 
 Digital Wellbeing 是 UsageStats API 的主要消费者之一。它负责：
 
@@ -1266,13 +1087,204 @@ Digital Wellbeing 是 UsageStats API 的主要消费者之一。它负责：
 3. 统计通知数量与解锁次数
 4. 提供 app timer、专注模式等 UI
 
-### 29.12.12 时间变更校正
+### 29.11.12 时间变更校正
 
 系统时间跳变会破坏 usage 统计的一致性。UsageStatsService 会同时参考 `elapsedRealtime()` 与 `currentTimeMillis()`，在时间变化超过阈值时做校正，避免事件序列错乱。
 
 ---
 
-## 总结（Summary）
+## 29.12 动手实践
+
+### 29.12.1 实验 1：观察 WakeLocks
+
+```bash
+# 在设备上
+adb shell dumpsys power
+adb shell dumpsys batterystats | grep Wake
+```
+
+### 29.12.2 实验 2：监控电源状态切换
+
+```bash
+# 终端 1
+adb logcat -s PowerManagerService DisplayPowerController
+
+# 终端 2
+# 按电源键观察状态切换
+```
+
+### 29.12.3 实验 3：强制 Device Idle（Doze）
+
+```bash
+# 保证屏幕熄灭且未充电
+adb shell dumpsys deviceidle step
+adb shell dumpsys deviceidle get deep
+adb shell dumpsys deviceidle unforce
+```
+
+### 29.12.4 实验 4：查看 App Standby Buckets
+
+```bash
+# 列出全部 app bucket
+adb shell am get-standby-bucket
+
+# 查看指定包
+adb shell am get-standby-bucket com.example.app
+
+# 强制设置 bucket
+adb shell am set-standby-bucket com.example.app rare
+```
+
+### 29.12.5 实验 5：检查 Battery Stats
+
+```bash
+# 重置统计
+adb shell dumpsys batterystats --reset
+
+# 使用设备一段时间后导出
+adb shell dumpsys batterystats
+
+# 生成 Battery Historian 用 checkin 格式
+adb shell dumpsys batterystats --checkin
+```
+
+### 29.12.6 实验 6：监控 Thermal 状态
+
+```bash
+adb shell dumpsys thermalservice
+adb shell cmd thermalservice override-status 3
+adb shell cmd thermalservice reset
+```
+
+### 29.12.7 实验 7：Power HAL 交互
+
+```bash
+# dump power HAL
+adb shell dumpsys android.hardware.power.IPower/default
+```
+
+### 29.12.8 实验 8：查看 Suspend Blockers
+
+```bash
+adb shell dumpsys power
+adb shell cat /sys/kernel/debug/wakeup_sources
+```
+
+### 29.12.9 实验 9：ADPF Hint Session
+
+```bash
+adb shell dumpsys android.hardware.power.IPower/default
+adb logcat | grep -i adpf
+```
+
+### 29.12.10 实验 10：观察 CPU 频率
+
+```bash
+# 查看所有 CPU 当前频率
+adb shell cat /sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq
+
+# 观察频率变化
+adb shell watch -n 0.5 cat /sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq
+
+# 查看 governor
+adb shell cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
+```
+
+### 29.12.11 实验 11：追踪 Power 事件
+
+```bash
+adb shell atrace -c -b 4096 power sched freq idle
+```
+
+### 29.12.12 实验 12：模拟电池条件
+
+```bash
+adb shell dumpsys battery unplug
+adb shell dumpsys battery set level 15
+adb shell dumpsys battery set status 3
+adb shell dumpsys battery reset
+```
+
+### 29.12.13 实验 13：Battery Saver 测试
+
+```bash
+adb shell settings put global low_power 1
+adb shell settings put global low_power 0
+adb shell settings put global low_power_trigger_level 20
+adb shell settings get global low_power
+```
+
+### 29.12.14 实验 14：Kernel Wakelock 分析
+
+```bash
+# framework wakelock
+adb shell dumpsys power
+
+# kernel wakelock / wakeup source
+adb shell cat /sys/kernel/debug/wakeup_sources
+adb shell cat /d/wakeup_sources
+```
+
+### 29.12.15 实验 15：显示电源状态
+
+```bash
+adb shell dumpsys display
+adb shell settings get system screen_off_timeout
+```
+
+### 29.12.16 实验 16：Power Groups（多显示）
+
+```bash
+adb shell dumpsys power
+```
+
+关注其中每个 group 的：
+
+- group ID
+- wakefulness
+- last wake/sleep time
+- wake lock summary
+- user activity summary
+
+### 29.12.17 实验 17：探索 `DeviceIdleController`
+
+```bash
+adb shell dumpsys deviceidle
+adb shell dumpsys deviceidle force-idle deep
+adb shell dumpsys deviceidle unforce
+adb shell dumpsys deviceidle whitelist
+```
+
+### 29.12.18 实验 18：监控 Power HAL 交互
+
+```bash
+adb logcat | grep -i powerhal
+adb shell dumpsys android.hardware.power.IPower/default
+```
+
+### 29.12.19 实验 19：监控 ADPF Session
+
+```bash
+adb logcat | grep -i adpf
+```
+
+### 29.12.20 实验 20：综合电源审计
+
+```bash
+#!/bin/bash
+echo "=== power ==="
+adb shell dumpsys power
+echo "=== batterystats ==="
+adb shell dumpsys batterystats | head -200
+echo "=== thermal ==="
+adb shell dumpsys thermalservice
+echo "=== deviceidle ==="
+adb shell dumpsys deviceidle
+echo "=== standby buckets ==="
+adb shell am get-standby-bucket
+```
+
+## 小结
 
 Android 电源管理不是单点优化，而是一套跨越 framework、HAL、kernel 与统计系统的完整治理链路。它既要保证用户按下电源键、点亮屏幕、来电唤醒时足够灵敏，也要保证设备在口袋里、桌面上、夜间待机时尽可能深睡。
 

@@ -1128,24 +1128,28 @@ atest CtsAppFunctionsTestCases
 
 前三条在 AOSP 根目录执行，最后一条用于运行 CTS 验证。
 
-### 50.12.11 查询 ODI Feature
+### 练习 25-11：实现 ComputerControlSession 回调
+
+实现 `ComputerControlSession` 回调时，应把会话创建、显示稳定、输入注入结果和异常关闭都接入日志，确保代理能够区分 UI 尚未稳定、目标应用拒绝操作、以及 session 自身已经失效这几类状态。
+
+### 练习 25-12：查询 OnDeviceIntelligence Feature
 
 ```java
 OnDeviceIntelligenceManager manager =
         context.getSystemService(OnDeviceIntelligenceManager.class);
 manager.listFeatures(context.getMainExecutor(), features -> {
-    // inspect available features
+    // 检查可用 feature
 });
 ```
 
-### 50.12.12 使用 AppSearch 做函数发现
+### 练习 25-13：使用 AppSearch 发现函数
 
 ```java
 AppSearchManager manager = context.getSystemService(AppSearchManager.class);
-// Open session, query metadata schema, then resolve visible app functions.
+// 打开 session，查询 metadata schema，再解析可见 app function。
 ```
 
-### 50.12.13 管理 AppFunction 访问标志
+### 练习 25-14：管理 AppFunction 访问权限
 
 ```bash
 adb shell settings put secure app_functions_additional_agents <agent.package>
@@ -1155,15 +1159,27 @@ adb shell cmd appfunctions revoke-access --user 0 --agent <agent> --target <targ
 adb shell settings delete secure app_functions_additional_agents
 ```
 
-### 50.12.14 带 Attribution 的 AppFunction
+### 练习 25-15：使用 C API 构建 NNAPI 模型
+
+用 NNAPI C API 构建一个最小模型时，基本流程是创建 `ANeuralNetworksModel`，添加输入、权重、bias、标量参数和输出 operand，调用 `ANeuralNetworksModel_addOperation()` 添加操作，再通过 `ANeuralNetworksCompilation` 编译并用 `ANeuralNetworksExecution` 执行。这个练习的重点是理解 NNAPI 的模型图不是 Java/Kotlin 对象图，而是由 operand 索引和 operation 拓扑描述的底层执行图。
+
+### 练习 25-16：通过 ADB 管理 AppFunction 访问标志
+
+访问标志可以通过 shell 命令管理，用来验证 agent allowlist、目标应用授权和拒绝状态是否按预期生效。测试时应覆盖 grant、check、revoke 和清理 allowlist 四个步骤。
+
+### 练习 25-17：实现带 Attribution 的 AppFunction
 
 实现时应把 agent 身份、调用来源和目标功能一并纳入 attribution 信息，以便系统侧留下完整可审计记录。
 
-### 50.12.15 带 URI Grant 的 AppFunction
+### 练习 25-18：处理带 URI Grant 的 AppFunction
 
 如果响应中包含 `content://` URI，记得验证系统是否正确附带了 grant，否则 agent 会在读取资源时失败。
 
-### 50.12.16 常见故障排查
+### 练习 25-19：使用 Mirror Display 运行 Computer Control
+
+创建 Computer Control session 时，可以附加 mirror display 供人类观察自动化过程。这个练习用于验证虚拟显示、镜像 surface、触摸注入和 session 关闭路径能否同时工作。
+
+### 练习 25-20：调试常见 AppFunction 问题
 
 ```bash
 adb shell dumpsys package <target.package> | findstr AppFunctionService
@@ -1173,7 +1189,7 @@ adb shell cmd appsearch query-documents --user 0 --package <target.package> --qu
 adb shell setprop log.tag.AppFunctionManagerService VERBOSE
 ```
 
-### 50.12.17 端到端追踪一次 AppFunction 执行
+### 练习 25-21：端到端追踪 AppFunction 执行
 
 ```bash
 adb shell perfetto -o /data/misc/perfetto-traces/appfunctions.pftrace -t 10s \
@@ -1183,7 +1199,7 @@ adb pull /data/misc/perfetto-traces/appfunctions.pftrace .
 
 抓 trace 时同步触发一次真实的函数执行，可以用来分析 Binder、服务绑定和回调延迟。
 
-## Summary
+## 小结
 
 这一章覆盖了 Android 在“代理执行”和“端侧智能”方向上的关键系统能力。它们表面上分属不同模块，实际上共享非常接近的系统设计语言：应用侧 manager、Binder/AIDL、`system_server` 中介、隔离服务或 HAL、严格权限，以及面向调试和审计的 shell 与日志入口。
 
@@ -1198,7 +1214,7 @@ adb pull /data/misc/perfetto-traces/appfunctions.pftrace .
 - `AdServices` 展示了另一类端侧智能路径：在强隐私约束下完成分类、拍卖、归因和 SDK 沙箱执行。
 - 从整体趋势看，Android 正在从“理解内容”走向“理解意图并执行动作”，而 AppFunctions 与 Computer Control 分别承担结构化主路径和 UI 自动化兜底路径。
 
-### 关键源码路径
+### 关键源码文件
 
 | 组件 | 路径 |
 |---|---|
@@ -1240,7 +1256,7 @@ adb pull /data/misc/perfetto-traces/appfunctions.pftrace .
 | CustomAudienceManager | `packages/modules/AdServices/adservices/framework/java/android/adservices/customaudience/CustomAudienceManager.java` |
 | TopicsWorker | `packages/modules/AdServices/adservices/service-core/java/com/android/adservices/service/topics/TopicsWorker.java` |
 
-### 术语表
+### 核心术语表
 
 | 术语 | 含义 |
 |---|---|

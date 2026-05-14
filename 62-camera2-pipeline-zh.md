@@ -1886,7 +1886,7 @@ NDK API 会把 framework / service / HAL 各层错误映射成 `camera_status_t`
 
 ---
 
-## 62.8 动手实践（Try It）
+## 62.8 动手实践
 
 ### 62.8.1 练习 1：枚举相机设备
 
@@ -2116,7 +2116,7 @@ ls frameworks/av/services/camera/libcameraservice/api2/*CompositeStream*
 - per-frame controllable metadata key 有多少
 - composite stream、buffer manager、多线程调度是如何拆开的
 
-## Summary
+## 小结
 
 Camera2 是 AOSP 中最成熟、也最复杂的硬件管线之一。这个子系统最值得抓住的几个点：
 

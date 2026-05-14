@@ -655,7 +655,7 @@ graph TD
     E --> F["合规判断 / 企业后台验证"]
 ```
 
-## 59.9 Try It
+## 59.9 动手实践
 
 ### 59.9.1 练习 1：检查 DPMS 源码规模
 
@@ -850,7 +850,7 @@ adb shell am start -a android.intent.action.VIEW -d "https://example.com" --user
 | `frameworks/base/core/java/android/content/pm/CrossProfileApps.java` | 跨资料交互 API |
 | `frameworks/base/core/java/android/app/admin/FactoryResetProtectionPolicy.java` | FRP 配置 |
 
-## Summary
+## 小结
 
 Android Enterprise 不是一个边缘特性，而是 Android 平台里极其深的一层系统治理框架。
 

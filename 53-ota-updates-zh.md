@@ -556,81 +556,9 @@ Virtual A/B 还需要额外统计 merge 速度、剩余数据量、是否中断�
 - recovery 日志
 - `dumpsys` / 持久化首选项
 
-## 53.14 动手实践：OTA 实验
+## 53.14 Troubleshooting OTA Failures
 
-### 53.14.1 检查 Payload
-
-```bash
-m brillo_update_payload
-brillo_update_payload properties --payload payload.bin
-```
-
-输出通常会包含 payload 版本、manifest 长度、分区数量以及每个分区的操作统计。
-
-### 53.14.2 生成 Full OTA
-
-```bash
-ota_from_target_files target-files.zip full-ota.zip
-```
-
-生成后可检查其中的 `payload.bin`、`payload_properties.txt` 和 metadata 文件。
-
-### 53.14.3 生成 Incremental OTA
-
-```bash
-ota_from_target_files -i old-target-files.zip new-target-files.zip incremental-ota.zip
-```
-
-### 53.14.4 通过 ADB 应用 OTA
-
-```bash
-adb push ota.zip /data/ota_package/ota.zip
-adb shell update_engine_client --update --payload=file:///data/ota_package/ota.zip
-adb sideload ota.zip
-```
-
-前两条更偏 A/B / `update_engine` 路径，最后一条是 recovery sideload 常见方式。
-
-### 53.14.5 监控更新进度
-
-```bash
-adb logcat -s update_engine
-adb shell update_engine_client --status
-adb shell bootctl get-current-slot
-```
-
-### 53.14.6 观察 Virtual A/B Merge
-
-```bash
-adb shell snapshotctl dump
-adb logcat -s snapuserd
-```
-
-### 53.14.7 在 Cuttlefish 上模拟更新
-
-Cuttlefish 对 A/B 和 Virtual A/B 支持较完整，非常适合做增量 OTA 和 merge 行为实验。
-
-### 53.14.8 检查 Recovery 模式
-
-```bash
-adb reboot recovery
-adb shell cat /cache/recovery/last_log
-```
-
-### 53.14.9 使用特定 VABC 选项构建 OTA
-
-原文在这里讨论了自定义 VABC 参数。实践重点是理解生成参数如何影响 snapshot / COW 行为，而不是记住某个单独命令。
-
-### 53.14.10 Payload 校验
-
-```bash
-brillo_update_payload verify --payload payload.bin
-brillo_update_payload properties --payload payload.bin
-```
-
-## 53.15 排查 OTA 失败
-
-### 53.15.1 常见失败模式
+### 53.14.1 常见失败模式
 
 常见问题包括：
 
@@ -641,14 +569,14 @@ brillo_update_payload properties --payload payload.bin
 - boot 切换失败
 - postinstall 失败
 
-### 53.15.2 调试 `update_engine`
+### 53.14.2 调试 `update_engine`
 
 ```bash
 adb shell setprop log.tag.update_engine VERBOSE
 adb shell update_engine_client --dump
 ```
 
-### 53.15.3 调试 `snapuserd`
+### 53.14.3 调试 `snapuserd`
 
 ```bash
 adb shell ps -A | findstr snapuserd
@@ -656,16 +584,16 @@ adb shell dmctl list devices
 adb shell snapshotctl dump
 ```
 
-### 53.15.4 从失败的 Virtual A/B 更新恢复
+### 53.14.4 从失败的 Virtual A/B 更新恢复
 
 ```bash
 adb shell update_engine_client --cancel
 adb shell update_engine_client --reset_status
 ```
 
-## 53.16 内部深入：完整数据路径
+## 53.15 Internals Deep Dive: The Complete Data Path
 
-### 53.16.1 单个 `REPLACE` 操作
+### 53.15.1 单个 `REPLACE` 操作
 
 对一个 `REPLACE` 操作来说，数据路径大致是：
 
@@ -673,87 +601,87 @@ adb shell update_engine_client --reset_status
 2. 由 `DeltaPerformer` 交给 writer。
 3. 写入 inactive slot 或 COW。
 
-### 53.16.2 `SOURCE_COPY` 的数据流
+### 53.15.2 `SOURCE_COPY` 的数据流
 
 这类操作会从旧分区读取源块，再拷贝到目标位置。其意义在于减少 payload 大小，而不是重新传输未变化数据。
 
-### 53.16.3 XOR 操作的数据流
+### 53.15.3 XOR 操作的数据流
 
 启用 VABC XOR 时，系统会记录旧数据与新数据之间的 XOR 差异，以进一步压缩 COW 记录。
 
-## 53.17 高级主题
+## 53.16 Advanced Topics
 
-### 53.17.1 Partial Updates
+### 53.16.1 Partial Updates
 
 并非所有 OTA 都必须覆盖所有分区。部分更新可以只针对特定分区或模块，但前提是依赖与版本关系足够清晰。
 
-### 53.17.2 Multi-Payload Updates
+### 53.16.2 Multi-Payload Updates
 
 某些场景会打包多个 payload，使系统可按设备状态或组件分组应用更新。
 
-### 53.17.3 通过 OTA 更新 APEX
+### 53.16.3 通过 OTA 更新 APEX
 
 除了 Play System Update，某些场景下 APEX 也可以随整机 OTA 一并更新，这说明 Mainline 与 OTA 并不是互斥体系。
 
-### 53.17.4 动态分区 resize
+### 53.16.4 动态分区 resize
 
 动态分区在 OTA 过程中可能需要调整大小，这会直接影响 snapshot 和可用空间计算。
 
-### 53.17.5 Non-A/B OTA 内部
+### 53.16.5 Non-A/B OTA 内部
 
 legacy OTA 仍有其存在价值，特别是在旧设备和恢复路径上。原文给了 updater-script 片段，中文稿保留结论：其实现风格与 A/B 完全不同，更偏 recovery 驱动的脚本式更新。
 
-### 53.17.6 Two-Step Updates
+### 53.16.6 Two-Step Updates
 
 两阶段更新用于处理一些必须跨重启完成的复杂场景。
 
-### 53.17.7 Brick OTAs
+### 53.16.7 Brick OTAs
 
 所谓 brick OTA 讨论的是最坏情况更新失败模型，也提醒读者理解为什么 A/B 和 Virtual A/B 会被设计成当前主流方案。
 
-## 53.18 安全考量
+## 53.17 Security Considerations
 
-### 53.18.1 Payload 签名
+### 53.17.1 Payload 签名
 
 没有签名校验，OTA 就会成为最高权限远程代码执行入口。
 
-### 53.18.2 Metadata 签名
+### 53.17.2 Metadata 签名
 
 不仅 payload 数据本身要可信，描述如何应用 payload 的 metadata 也必须可信。
 
-### 53.18.3 传输安全
+### 53.17.3 传输安全
 
 从服务器到设备的下载链路也必须考虑 TLS、断点续传安全和中间人风险。
 
-### 53.18.4 SELinux Context
+### 53.17.4 SELinux Context
 
 OTA 相关服务、临时文件和分区映射都依赖严格的 SELinux 上下文隔离。
 
-### 53.18.5 Verity 与 COW 交互
+### 53.17.5 Verity 与 COW 交互
 
 Virtual A/B 中 verity 与 snapshot / COW 如何配合，是该方案安全模型的关键部分。
 
-## 53.19 `update_engine` 服务配置
+## 53.18 update_engine Service Configuration
 
-### 53.19.1 init 服务定义
+### 53.18.1 init 服务定义
 
 `update_engine` 通过 init 配置启动，并常带有较低 IO 优先级，避免更新过程严重影响前台系统体验。
 
-### 53.19.2 持久化首选项
+### 53.18.2 持久化首选项
 
 服务会把关键状态写入持久化首选项，用于断点恢复、结果追踪和调试。
 
-### 53.19.3 CPU 限流
+### 53.18.3 CPU 限流
 
 更新和 merge 都可能消耗较多 CPU，因此也可能带有节流或调度策略，减少对交互体验的影响。
 
-## 53.20 错误码参考
+## 53.19 Error Code Reference
 
-### 53.20.1 Native 错误码
+### 53.19.1 Native 错误码
 
 原文列了完整 native 错误码表。中文稿保留结论：错误码设计非常细，是因为 OTA 失败原因跨下载、签名、写入、merge、boot 验证等多个边界。
 
-### 53.20.2 错误码分类
+### 53.19.2 错误码分类
 
 把错误码分组理解更有效，例如：
 
@@ -764,37 +692,37 @@ Virtual A/B 中 verity 与 snapshot / COW 如何配合，是该方案安全模�
 - merge / snapshot 类
 - boot / 验证类
 
-## 53.21 `DownloadAction` 深入
+## 53.20 The DownloadAction in Detail
 
-### 53.21.1 初始化
+### 53.20.1 初始化
 
 `DownloadAction` 负责准备下载或流式读取路径，建立 fetcher，并对接 pipeline 下游。
 
-### 53.21.2 进度上报
+### 53.20.2 进度上报
 
 进度不是简单按“已下载字节 / 总字节”计算，还会结合写入和校验阶段映射到用户可见进度。
 
-### 53.21.3 `MultiRangeHttpFetcher`
+### 53.20.3 `MultiRangeHttpFetcher`
 
 该组件体现了 streaming OTA 的核心要求：支持 HTTP range，多段读取，而不必整包一次性下载。
 
-## 53.22 文件系统验证
+## 53.21 Filesystem Verification
 
-### 53.22.1 `FilesystemVerifierAction`
+### 53.21.1 `FilesystemVerifierAction`
 
 写入完成后，系统还需要验证结果是否符合预期。该 action 就承担这类校验职责。
 
-### 53.22.2 Verity Hash Tree 生成
+### 53.21.2 Verity Hash Tree 生成
 
 verity 哈希树让系统可以在后续读取过程中持续验证块完整性，而不是只在安装时做一次性校验。
 
-## 53.23 `InstallPlan` 数据结构
+## 53.22 The Install Plan Data Structure
 
-### 53.23.1 顶层字段
+### 53.22.1 顶层字段
 
 `InstallPlan` 用于描述一次 OTA 应用所需的总体信息，例如 payload、目标槽位、分区计划和 postinstall 配置。
 
-### 53.23.2 每分区信息
+### 53.22.2 每分区信息
 
 每个分区项通常包含：
 
@@ -803,15 +731,15 @@ verity 哈希树让系统可以在后续读取过程中持续验证块完整性�
 - source hash / target hash
 - writer 所需参数
 
-### 53.23.3 Payload 元数据
+### 53.22.3 Payload 元数据
 
 安装计划会把 payload manifest 和运行期决策抽象成更易消费的数据结构，供 pipeline 各 action 共享。
 
-## 53.24 Partition Writer Factory
+## 53.23 Partition Writer Factory
 
 Writer Factory 的意义在于根据当前 OTA 模式选择正确 writer，而不让 `DeltaPerformer` 自己理解所有后端细节。
 
-### 53.24.1 `PartitionWriter` I/O 路径
+### 53.23.1 `PartitionWriter` I/O 路径
 
 标准 A/B 常见路径可概括为：
 
@@ -819,7 +747,7 @@ Writer Factory 的意义在于根据当前 OTA 模式选择正确 writer，而�
 DeltaPerformer -> PartitionWriter -> ExtentWriter -> pwrite() -> inactive slot block device
 ```
 
-### 53.24.2 `VABCPartitionWriter` I/O 路径
+### 53.23.2 `VABCPartitionWriter` I/O 路径
 
 Virtual A/B Compression 常见路径则更接近：
 
@@ -827,17 +755,17 @@ Virtual A/B Compression 常见路径则更接近：
 DeltaPerformer -> VABCPartitionWriter -> ICowWriter -> CowWriterV3 -> COW file on /data
 ```
 
-### 53.24.3 XOR Map 处理
+### 53.23.3 XOR Map 处理
 
 启用 XOR 时，writer 需要额外维护块映射，决定哪些块使用 XOR merge 语义而不是普通 copy。
 
-## 53.25 `update_verifier`
+## 53.24 The Update Verifier
 
-### 53.25.1 目的与时机
+### 53.24.1 目的与时机
 
 `update_verifier` 在 OTA 后首次引导时运行，用于确认新系统分区可被完整读取和验证。
 
-### 53.25.2 校验流程
+### 53.24.2 校验流程
 
 ```mermaid
 flowchart TD
@@ -850,17 +778,17 @@ flowchart TD
     F -->|否| H["触发失败路径 / 允许 bootloader 回退"]
 ```
 
-### 53.25.3 与 dm-verity 集成
+### 53.24.3 与 dm-verity 集成
 
 `update_verifier` 自身不重新计算 hash，而是依赖 dm-verity 在读取过程中完成真实性验证。
 
-## 53.26 Sideload 模式：`update_engine_sideload`
+## 53.25 Sideload Mode: update_engine_sideload
 
-### 53.26.1 基于 Recovery 的 OTA 应用
+### 53.25.1 基于 Recovery 的 OTA 应用
 
 `update_engine_sideload` 是 recovery 场景下使用的精简版更新引擎。它不依赖完整 Android framework，也不需要正常运行的 Binder 世界。
 
-### 53.26.2 Sideload 流程
+### 53.25.2 Sideload 流程
 
 ```mermaid
 sequenceDiagram
@@ -875,7 +803,79 @@ sequenceDiagram
     UES-->>Rec: 返回成功或失败
 ```
 
-## Summary
+## 53.26 动手实践：OTA 实验
+
+### 53.26.1 检查 Payload
+
+```bash
+m brillo_update_payload
+brillo_update_payload properties --payload payload.bin
+```
+
+输出通常会包含 payload 版本、manifest 长度、分区数量以及每个分区的操作统计。
+
+### 53.26.2 生成 Full OTA
+
+```bash
+ota_from_target_files target-files.zip full-ota.zip
+```
+
+生成后可检查其中的 `payload.bin`、`payload_properties.txt` 和 metadata 文件。
+
+### 53.26.3 生成 Incremental OTA
+
+```bash
+ota_from_target_files -i old-target-files.zip new-target-files.zip incremental-ota.zip
+```
+
+### 53.26.4 通过 ADB 应用 OTA
+
+```bash
+adb push ota.zip /data/ota_package/ota.zip
+adb shell update_engine_client --update --payload=file:///data/ota_package/ota.zip
+adb sideload ota.zip
+```
+
+前两条更偏 A/B / `update_engine` 路径，最后一条是 recovery sideload 常见方式。
+
+### 53.26.5 监控更新进度
+
+```bash
+adb logcat -s update_engine
+adb shell update_engine_client --status
+adb shell bootctl get-current-slot
+```
+
+### 53.26.6 观察 Virtual A/B Merge
+
+```bash
+adb shell snapshotctl dump
+adb logcat -s snapuserd
+```
+
+### 53.26.7 在 Cuttlefish 上模拟更新
+
+Cuttlefish 对 A/B 和 Virtual A/B 支持较完整，非常适合做增量 OTA 和 merge 行为实验。
+
+### 53.26.8 检查 Recovery 模式
+
+```bash
+adb reboot recovery
+adb shell cat /cache/recovery/last_log
+```
+
+### 53.26.9 使用特定 VABC 选项构建 OTA
+
+原文在这里讨论了自定义 VABC 参数。实践重点是理解生成参数如何影响 snapshot / COW 行为，而不是记住某个单独命令。
+
+### 53.26.10 Payload 校验
+
+```bash
+brillo_update_payload verify --payload payload.bin
+brillo_update_payload properties --payload payload.bin
+```
+
+## 53.27 Summary
 
 OTA 更新是 Android 最关键、也最复杂的系统基础设施之一。它的目标从来不只是“把新文件写上去”，而是要在保证设备可引导、用户几乎无感、网络条件不稳定、镜像体积巨大和安全要求极高的前提下，可靠地把整套系统演进到下一版本。
 
@@ -889,7 +889,7 @@ OTA 更新是 Android 最关键、也最复杂的系统基础设施之一。它�
 - recovery、ADB sideload、`update_verifier`、postinstall、防回滚和 dm-verity 共同补齐了 legacy 兼容、首次引导验证和完整性保护链路。
 - OTA 问题排查往往跨越 payload、writer、snapshot、merge、bootloader 和 framework 多个边界，因此日志、错误码、状态机和独立工具链在这个子系统里格外重要。
 
-### 关键源码路径
+关键源码路径：
 
 | 组件 | 路径 |
 |---|---|

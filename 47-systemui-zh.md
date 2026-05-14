@@ -442,9 +442,147 @@ Dagger 图也必须支持按 display 建立作用域，避免所有 UI 状态硬
 
 平板和大屏设备上，taskbar 与导航栏能力存在重叠和协同，因此两者需要更深度集成。
 
-## 47.12 动手实践：添加一个自定义 QS Tile
+## 47.12 Monet / 动态色 / Material You
 
-### 47.12.1 创建 Tile 类
+### 47.12.1 端到端管线
+
+Monet 的核心目标是把壁纸色彩提取成系统级调色板，并把结果应用到 SystemUI 与其他系统界面。
+
+### 47.12.2 颜色提取
+
+先从壁纸中挑选 seed color，再基于算法生成完整色阶。
+
+### 47.12.3 `ColorScheme`
+
+`ColorScheme` 负责组织种子色和衍生出的多组 tonal palette。
+
+### 47.12.4 `TonalPalette`
+
+通过不同 shade stop 生成一系列深浅层次，为后续 token 映射提供原料。
+
+### 47.12.5 `ThemeOverlayController`
+
+它是动态主题应用的总协调器，负责监听壁纸变化、生成 overlay、延迟应用和同步系统主题状态。
+
+### 47.12.6 颜色事件延迟
+
+Monet 不会在每次变化时立刻粗暴应用，而会做一定的 deferral，以避免解锁、切换和启动过程中的视觉抖动。
+
+### 47.12.7 Overlay 创建与应用
+
+动态色最终会转换成 overlay transaction，再应用到目标包和系统用户空间中。
+
+### 47.12.8 `DynamicColors` Token 映射
+
+调色板不是直接上屏，而要映射为系统 token，供各界面组件引用。
+
+### 47.12.9 `ThemeOverlayApplier`
+
+负责真正提交 overlay 变更事务。
+
+### 47.12.10 设置集成
+
+Monet 行为需要与壁纸、主题、对比度和用户偏好设置协同。
+
+### 47.12.11 硬件默认颜色
+
+没有壁纸或特殊设备场景下，还需要硬件或系统默认颜色兜底。
+
+### 47.12.12 对比度支持
+
+动态色不能只考虑好看，还必须考虑可读性和高对比度需求。
+
+### 47.12.13 Monet 关键源码路径
+
+重点可继续阅读：
+
+- `ThemeOverlayController`
+- `ColorScheme`
+- `TonalPalette`
+- `DynamicColors`
+- `ThemeOverlayApplier`
+
+## 47.13 Keyguard Deep Dive
+
+### 47.13.1 Keyguard 状态机
+
+现代 keyguard 已经不只是 show / hide，而是一套较细的状态机，包括：
+
+- `LOCKSCREEN`
+- `AOD`
+- `DOZING`
+- `PRIMARY_BOUNCER`
+- `ALTERNATE_BOUNCER`
+- `GONE`
+- `OCCLUDED`
+
+### 47.13.2 醒着与睡眠状态分类
+
+Keyguard 需要和 `Wakefulness`、电源状态、doze 状态协同判断当前到底处于“锁屏可见”“AOD”“正在熄屏”“正在唤醒”中的哪一种。
+
+### 47.13.3 `KeyguardTransitionInteractor`
+
+新架构里越来越多状态流转交给 transition interactor 观察和驱动，而不是全压在单个 mediator 上。
+
+### 47.13.4 Transition Interactor 层级
+
+不同起点 / 终点状态常有专门的 interactor，例如 FromAod、FromLockscreen 等。它们使状态迁移逻辑可组合、可测试。
+
+### 47.13.5 `KeyguardViewMediator` 内部机制
+
+尽管在迁移中，它仍然承担大量关键职责，包括：
+
+- 锁屏显隐
+- 睡眠 / 唤醒过渡
+- 信任与解锁协调
+- 与 bouncer、biometric 协作
+
+### 47.13.6 生物识别解锁模式
+
+不同 biometric 模式会映射成不同解锁路径，例如直接解锁、仅唤醒、进入 bouncer、维持 AOD 等。
+
+### 47.13.7 Bouncer 细节
+
+主 bouncer 与 alternate bouncer（例如 UDFPS 场景）分别服务不同交互形式，但都要对接统一 keyguard 状态机。
+
+### 47.13.8 AOD 过渡管线
+
+从锁屏进入 AOD、从 AOD 被通知脉冲唤醒，又或从 AOD 回到完整锁屏，都涉及多子系统联动：
+
+- PowerManager
+- KeyguardViewMediator
+- DozeServiceHost
+- DozeScrimController
+- KeyguardTransitionInteractor
+
+### 47.13.9 `KeyguardRepository`
+
+新的数据层会把关键状态统一集中到 repository，例如：
+
+- 是否显示 keyguard
+- 是否被 occlude
+- 是否 dozing
+- biometric unlock 状态
+- wakefulness
+
+### 47.13.10 Scene Container 迁移
+
+Keyguard 正在向 Scene Container 架构迁移。长期目标是用 scene / overlay 模型替代大量旧式 view controller 直接拼接逻辑。
+
+### 47.13.11 Keyguard 关键源码路径
+
+重点可继续阅读：
+
+- `KeyguardViewMediator`
+- `KeyguardRepository`
+- `KeyguardTransitionInteractor`
+- `BiometricUnlockInteractor`
+- `PrimaryBouncerInteractor`
+- `AlternateBouncerInteractor`
+
+## 47.14 动手实践：添加自定义 QS Tile
+
+### 47.14.1 创建 Tile 类
 
 自定义一个 SystemUI 内建 tile 的最小实现通常需要：
 
@@ -452,19 +590,19 @@ Dagger 图也必须支持按 display 建立作用域，避免所有 UI 状态硬
 2. 定义状态对象
 3. 实现点击、长按与状态刷新
 
-### 47.12.2 在 QS Factory 中注册
+### 47.14.2 在 QS Factory 中注册
 
 没有注册，spec 无法解析成 tile 实例，因此 factory 接入是必要步骤。
 
-### 47.12.3 添加图标资源
+### 47.14.3 添加图标资源
 
 tile 至少需要对应 drawable / icon 资源，否则状态显示不完整。
 
-### 47.12.4 加入默认 tile 列表（可选）
+### 47.14.4 加入默认 tile 列表（可选）
 
 如果希望首次启动就出现，可把 spec 加入默认 tile 配置；否则只在手动添加时显示。
 
-### 47.12.5 构建与测试
+### 47.14.5 构建与测试
 
 ```bash
 m SystemUI
@@ -477,7 +615,7 @@ adb shell start
 
 如果只想更快迭代，也可以考虑只重启 SystemUI 进程，而不是整机 framework。
 
-### 47.12.6 验证功能
+### 47.14.6 验证功能
 
 ```bash
 adb shell dumpsys power | grep -i wake
@@ -486,7 +624,7 @@ adb logcat -s SystemUI:CaffeineTile
 
 切换 tile 后，重点观察状态是否变化、底层行为是否生效，以及日志是否符合预期。
 
-### 47.12.7 一个 QS Tile 的架构总结
+### 47.14.7 一个 QS Tile 的架构总结
 
 一块 tile 通常横跨：
 
@@ -498,7 +636,7 @@ adb logcat -s SystemUI:CaffeineTile
 
 这很好地体现了 SystemUI 的分层模式。
 
-### 47.12.8 测试 Tile
+### 47.14.8 测试 Tile
 
 测试可以包括：
 
@@ -507,145 +645,7 @@ adb logcat -s SystemUI:CaffeineTile
 - 配置变化后恢复
 - 面板展开 / 收起后的行为一致性
 
-## 47.13 Monet / 动态色 / Material You
-
-### 47.13.1 端到端管线
-
-Monet 的核心目标是把壁纸色彩提取成系统级调色板，并把结果应用到 SystemUI 与其他系统界面。
-
-### 47.13.2 颜色提取
-
-先从壁纸中挑选 seed color，再基于算法生成完整色阶。
-
-### 47.13.3 `ColorScheme`
-
-`ColorScheme` 负责组织种子色和衍生出的多组 tonal palette。
-
-### 47.13.4 `TonalPalette`
-
-通过不同 shade stop 生成一系列深浅层次，为后续 token 映射提供原料。
-
-### 47.13.5 `ThemeOverlayController`
-
-它是动态主题应用的总协调器，负责监听壁纸变化、生成 overlay、延迟应用和同步系统主题状态。
-
-### 47.13.6 颜色事件延迟
-
-Monet 不会在每次变化时立刻粗暴应用，而会做一定的 deferral，以避免解锁、切换和启动过程中的视觉抖动。
-
-### 47.13.7 Overlay 创建与应用
-
-动态色最终会转换成 overlay transaction，再应用到目标包和系统用户空间中。
-
-### 47.13.8 `DynamicColors` Token 映射
-
-调色板不是直接上屏，而要映射为系统 token，供各界面组件引用。
-
-### 47.13.9 `ThemeOverlayApplier`
-
-负责真正提交 overlay 变更事务。
-
-### 47.13.10 设置集成
-
-Monet 行为需要与壁纸、主题、对比度和用户偏好设置协同。
-
-### 47.13.11 硬件默认颜色
-
-没有壁纸或特殊设备场景下，还需要硬件或系统默认颜色兜底。
-
-### 47.13.12 对比度支持
-
-动态色不能只考虑好看，还必须考虑可读性和高对比度需求。
-
-### 47.13.13 Monet 关键源码路径
-
-重点可继续阅读：
-
-- `ThemeOverlayController`
-- `ColorScheme`
-- `TonalPalette`
-- `DynamicColors`
-- `ThemeOverlayApplier`
-
-## 47.14 Keyguard 深入分析
-
-### 47.14.1 Keyguard 状态机
-
-现代 keyguard 已经不只是 show / hide，而是一套较细的状态机，包括：
-
-- `LOCKSCREEN`
-- `AOD`
-- `DOZING`
-- `PRIMARY_BOUNCER`
-- `ALTERNATE_BOUNCER`
-- `GONE`
-- `OCCLUDED`
-
-### 47.14.2 醒着与睡眠状态分类
-
-Keyguard 需要和 `Wakefulness`、电源状态、doze 状态协同判断当前到底处于“锁屏可见”“AOD”“正在熄屏”“正在唤醒”中的哪一种。
-
-### 47.14.3 `KeyguardTransitionInteractor`
-
-新架构里越来越多状态流转交给 transition interactor 观察和驱动，而不是全压在单个 mediator 上。
-
-### 47.14.4 Transition Interactor 层级
-
-不同起点 / 终点状态常有专门的 interactor，例如 FromAod、FromLockscreen 等。它们使状态迁移逻辑可组合、可测试。
-
-### 47.14.5 `KeyguardViewMediator` 内部机制
-
-尽管在迁移中，它仍然承担大量关键职责，包括：
-
-- 锁屏显隐
-- 睡眠 / 唤醒过渡
-- 信任与解锁协调
-- 与 bouncer、biometric 协作
-
-### 47.14.6 生物识别解锁模式
-
-不同 biometric 模式会映射成不同解锁路径，例如直接解锁、仅唤醒、进入 bouncer、维持 AOD 等。
-
-### 47.14.7 Bouncer 细节
-
-主 bouncer 与 alternate bouncer（例如 UDFPS 场景）分别服务不同交互形式，但都要对接统一 keyguard 状态机。
-
-### 47.14.8 AOD 过渡管线
-
-从锁屏进入 AOD、从 AOD 被通知脉冲唤醒，又或从 AOD 回到完整锁屏，都涉及多子系统联动：
-
-- PowerManager
-- KeyguardViewMediator
-- DozeServiceHost
-- DozeScrimController
-- KeyguardTransitionInteractor
-
-### 47.14.9 `KeyguardRepository`
-
-新的数据层会把关键状态统一集中到 repository，例如：
-
-- 是否显示 keyguard
-- 是否被 occlude
-- 是否 dozing
-- biometric unlock 状态
-- wakefulness
-
-### 47.14.10 Scene Container 迁移
-
-Keyguard 正在向 Scene Container 架构迁移。长期目标是用 scene / overlay 模型替代大量旧式 view controller 直接拼接逻辑。
-
-### 47.14.11 Keyguard 关键源码路径
-
-重点可继续阅读：
-
-- `KeyguardViewMediator`
-- `KeyguardRepository`
-- `KeyguardTransitionInteractor`
-- `BiometricUnlockInteractor`
-- `PrimaryBouncerInteractor`
-- `AlternateBouncerInteractor`
-
-## Summary
+## 小结
 
 SystemUI 是 Android 最复杂、最持续演进的应用级系统组件之一。它并不是单一功能，而是一组围绕系统表面的可见 UI 子系统：状态栏、shade、Quick Settings、锁屏、导航栏、音量、电源菜单、截图、多显示支持，以及日益复杂的动态主题和 keyguard 状态机。
 

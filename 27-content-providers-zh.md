@@ -1143,7 +1143,7 @@ URI grant 分临时与持久两种。临时授权通常随着目标 Activity 结
 
 MediaStore 为兼容依赖 `_data` 的旧应用，提供了 `/mnt/content/...` 形式的过渡路径。应用看起来像拿到了文件路径，实际上最终打开时仍会被重定向到受控的 ContentResolver / FUSE 路径，从而继续执行正确的权限判断。
 
-## 27.10 动手实践（Try It）
+## 27.10 动手实践
 
 本节用一组实际命令帮助你从 shell 角度理解 Provider 的行为。
 

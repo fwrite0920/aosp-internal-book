@@ -197,7 +197,7 @@ Manifest 中的关键元素如下：
 
 Manifest 还在 `<default>` 中定义了 `sync-j="4"`，也就是 `repo sync` 默认使用 4 个并行抓取线程。你可以通过命令行参数，例如 `-j16` 或更高值，在高速网络环境下显著提升同步速度。
 
-#### Manifest 结构深入理解
+#### Manifest 结构深解
 
 Manifest 文件本身具有层级结构。下面按元素展开：
 
@@ -245,7 +245,7 @@ Manifest 文件本身具有层级结构。下面按元素展开：
 
 它指向一个 Git superproject，用来记录在某个时间点上整棵源码树中每个子仓库的 SHA-1。这样就可以获得整个源码树的原子快照，这对可重复构建和问题二分定位都很有价值。
 
-#### Local Manifest
+#### 本地 Manifest
 
 你可以通过在 `.repo/local_manifests/` 下创建**本地 manifest**，在不修改上游 manifest 的前提下自定义源码树。例如，添加一个自定义项目：
 
@@ -644,7 +644,7 @@ graph LR
 | `incremental.go` | 增量构建支持 |
 | `live_tracker.go` | 依赖的实时文件跟踪 |
 
-#### Blueprint Mutator
+#### Blueprint Mutator 机制
 
 Mutator 是 Blueprint 中最关键的概念之一。Mutator 本质上是一个遍历模块并可对其进行修改的函数。它们主要用于：
 
@@ -687,7 +687,7 @@ func RegisterPostDepsMutators(ctx android.RegisterMutatorsContext) {
 
 **源码：** `build/soong/apex/apex.go` 第 64-70 行
 
-#### Blueprint Provider
+#### Blueprint Provider 机制
 
 Provider 是 Blueprint 在模块间传递结构化信息的机制。当模块生成 build action 时，它可以设置 *provider* 数据，而依赖它的模块随后可以读取这些数据。相比 Make 的全局变量，这是一种更有边界的设计：
 
@@ -3587,11 +3587,472 @@ Kleaf 的迁移，是 AOSP 与 Bazel 结合中最成功的案例之一。它很�
 
 ---
 
-## 2.10 Try It：为模拟器构建 AOSP
+## 2.10 进阶主题
+
+### 2.10.1 `soong.<TARGET_PRODUCT>.variables` 桥接文件
+
+Soong 与 Kati 需要共享配置数据。Kati 会写出一个 JSON 文件，Soong 再读取它。该路径以 `TARGET_PRODUCT` 为键；对于 `lunch aosp_cf_x86_64_phone-trunk_staging-userdebug`，`TARGET_PRODUCT=aosp_cf_x86_64_phone`：
+
+```
+out/soong/soong.<TARGET_PRODUCT>.variables
+```
+
+该路径在 `build/make/core/config.mk:1255` 中构造：
+
+```makefile
+SOONG_VARIABLES := $(SOONG_OUT_DIR)/soong.$(TARGET_PRODUCT)$(COVERAGE_SUFFIX).variables
+```
+
+对上面的 `aosp_cf_x86_64_phone` lunch 组合来说，实际文件是 `out/soong/soong.aosp_cf_x86_64_phone.variables`。典型内容如下：
+
+```json
+{
+    "Platform_sdk_version": 35,
+    "Platform_sdk_codename": "VanillaIceCream",
+    "Platform_version_active_codenames": ["VanillaIceCream"],
+    "DeviceName": "generic_arm64",
+    "DeviceArch": "arm64",
+    "DeviceArchVariant": "armv8-a",
+    "DeviceCpuVariant": "generic",
+    "DeviceSecondaryArch": "",
+    "Aml_abis": ["arm64-v8a"],
+    "Eng": true,
+    "Debuggable": true,
+    ...
+}
+```
+
+这个文件把 Make 世界（product 配置所在位置）与 Go 世界（模块编译发生位置）连接起来。你在 `.mk` 文件中修改某个 product 变量时，它会经由该文件影响 Soong 行为。只有在 `TARGET_PRODUCT` 未设置时，Soong 才回退到普通的 `out/soong/soong.variables`；已经 lunch 的构建始终写入带 product 后缀的文件。
+
+### 2.10.2 ABI 稳定性与 VNDK
+
+Android 构建系统通过多种机制强制执行 **ABI（Application Binary Interface）稳定性**：
+
+- **VNDK（Vendor Native Development Kit）：** 一组对 vendor 保证 ABI 稳定的系统库
+- **AIDL 接口：** system 与 vendor 分区之间的稳定 IPC 接口
+- **HIDL 接口：** 旧式 HAL 接口语言，正在逐步被 AIDL 取代
+- **System SDK：** 提供给 vendor 应用的稳定 Java API
+
+构建系统会跟踪哪些模块属于 VNDK，并强制执行依赖规则：
+
+```go
+// Module that is part of the VNDK
+cc_library {
+    name: "libcutils",
+    vndk: {
+        enabled: true,
+    },
+    ...
+}
+```
+
+Vendor 模块只能依赖 VNDK 库以及它们自己的私有库。任何通过不稳定接口穿越 system / vendor 边界的依赖，构建系统都会直接拒绝。
+
+### 2.10.3 构建标志与特性开关
+
+AOSP 通过 **aconfig** 管理 feature flag：
+
+```go
+// Flag declaration (in .aconfig file)
+package: "com.android.settings.flags"
+
+flag {
+    name: "new_wifi_page"
+    namespace: "settings_ui"
+    description: "Enable the redesigned WiFi settings page"
+    bug: "b/123456789"
+}
+```
+
+这些特性开关会根据 release 配置在构建期解析：
+
+```go
+// Using a flag in Android.bp
+cc_library {
+    name: "libwifi_settings",
+    srcs: select(release_flag("RELEASE_NEW_WIFI_PAGE"), {
+        true: ["new_wifi_page.cpp"],
+        default: ["old_wifi_page.cpp"],
+    }),
+}
+```
+
+这种机制使得同一份源码树可以在不同 release 配置下产出不同构建，而无需维护独立分支。
+
+### 2.10.4 构建系统指标
+
+AOSP 构建系统会采集详细的性能指标：
+
+```bash
+# Build with metrics collection
+m --build-event-log=build_event.log
+
+# View build metrics
+cat out/soong_build_metrics.pb | protoc --decode=...
+```
+
+关键指标包括：
+
+- 总构建时长
+- 各阶段耗时，例如 Soong、Kati、Ninja
+- 处理模块数量
+- 缓存命中率
+- 内存峰值
+- I/O 统计
+
+这些指标对于定位性能瓶颈、跟踪不同版本间的构建优化效果非常有价值。
+
+### 2.10.5 可重复构建
+
+AOSP 一直在追求 reproducible build，也就是在相同源码和相同构建环境下，应该得到完全一致的输出。为此构建系统采取了若干措施：
+
+- **固定时间戳：** 使用确定性时间戳，而不是当前系统时间
+- **排序输入：** 对文件列表与目录遍历结果排序，消除顺序带来的差异
+- **Hermetic 工具链：** 编译器和工具以预构建形式固定在仓库中
+- **沙箱式构建：** Soong 限制对声明输入范围外文件的访问
+- **`BUILD_DATETIME_FILE`：** 在全部构建规则中统一使用固定构建时间
+
+可重复构建对以下场景都很关键：
+
+- 安全审计，例如验证二进制是否与源码一致
+- CI/CD 缓存，例如相同输入应产生相同输出
+- 法规合规，某些市场要求构建可重复
+
+### 2.10.6 构建系统内部机制：模块变体架构
+
+构建系统最复杂的部分之一，就是模块 variant 管理。一个单独的 `cc_library` 声明，最终可能会膨胀成很多个变体：
+
+```mermaid
+graph TB
+    LIB[cc_library: libfoo]
+
+    subgraph "Architecture Variants"
+        ARM64[android_arm64]
+        X86[android_x86_64]
+        HOST[linux_glibc_x86_64]
+    end
+
+    subgraph "Link Type Variants"
+        SHARED[shared]
+        STATIC[static]
+    end
+
+    subgraph "APEX Variants"
+        PLATFORM[platform]
+        WIFI_APEX[com.android.wifi]
+        MEDIA_APEX[com.android.media]
+    end
+
+    subgraph "Sanitizer Variants"
+        NORMAL[normal]
+        ASAN[asan]
+        HWASAN[hwasan]
+    end
+
+    LIB --> ARM64
+    LIB --> X86
+    LIB --> HOST
+
+    ARM64 --> SHARED
+    ARM64 --> STATIC
+
+    SHARED --> PLATFORM
+    SHARED --> WIFI_APEX
+    SHARED --> MEDIA_APEX
+
+    PLATFORM --> NORMAL
+    PLATFORM --> ASAN
+    PLATFORM --> HWASAN
+
+    style LIB fill:#4a90d9,color:#fff
+    style ARM64 fill:#50b848,color:#fff
+    style SHARED fill:#e8a838,color:#fff
+    style PLATFORM fill:#d94a4a,color:#fff
+```
+
+因此，一个单独的 `cc_library` 最终可能扩展成数十个变体，每个变体都会生成自己的二进制。这个扩展过程由 mutator 体系系统化完成：
+
+1. **Architecture mutator：** 按目标架构拆分，例如 arm64、x86_64，同时生成 host 变体
+2. **Link type mutator：** 拆出 shared 和 static 版本
+3. **APEX mutator：** 按模块出现的每个 APEX 拆出对应变体，同时保留 platform 变体
+4. **Sanitizer mutator：** 生成 ASan、TSan、HWSan 等特殊变体
+5. **Image mutator：** 按不同镜像分区继续拆变体
+
+这也是 `out/soong/.intermediates/` 会如此庞大的根本原因，因为它要为每个模块的每个变体单独保存构建产物。
+
+---
+## 2.11 构建系统参考表
+
+这一节提供便于开发时快速检索的汇总表。
+
+### 2.11.1 常用构建命令总表
+
+| 命令 | 用途 | 示例 |
+|---------|---------|---------|
+| `source build/envsetup.sh` | 初始化构建环境 | 每个终端会话运行一次 |
+| `lunch <target>` | 选择构建目标 | `lunch aosp_arm64` |
+| `m` | 从树根构建 | `m` 或 `m droid` |
+| `m <module>` | 构建指定模块 | `m Settings` |
+| `m <image>` | 构建指定镜像 | `m systemimage` |
+| `mm` | 构建当前目录 | `cd frameworks/base && mm` |
+| `mmm <dir>` | 构建指定目录 | `mmm packages/apps/Settings` |
+| `m clean` | 删除输出目录 |  |
+| `m nothing` | 仅运行构建准备逻辑 | 适合检查配置 |
+| `m soong_docs` | 生成模块文档 | 输出到 `out/soong/docs/` |
+| `m json-module-graph` | 生成模块图 |  |
+| `m module-info` | 生成模块索引 |  |
+| `atest <test>` | 运行测试 | `atest SettingsTests` |
+| `croot` | `cd` 到源码树根目录 |  |
+| `gomod <module>` | `cd` 到模块源码目录 | `gomod Settings` |
+| `pathmod <module>` | 打印模块源码路径 | `pathmod Settings` |
+| `outmod <module>` | 打印模块输出路径 | `outmod Settings` |
+| `allmod` | 列出全部模块 |  |
+| `refreshmod` | 刷新模块索引 |  |
+| `printconfig` | 显示当前构建配置 |  |
+| `get_build_var <var>` | 打印构建变量 | `get_build_var TARGET_PRODUCT` |
+| `showcommands <target>` | 显示构建命令 |  |
+| `bpfmt -w .` | 格式化 Android.bp 文件 |  |
+| `androidmk Android.mk` | 将 mk 转为 bp |  |
+| `tapas <app>` | 构建独立应用 | `tapas Camera eng` |
+| `banchan <apex>` | 构建独立 APEX | `banchan com.android.wifi arm64` |
+
+### 2.11.2 关键环境变量
+
+| 变量 | 设置者 | 用途 |
+|----------|--------|---------|
+| `TOP` | envsetup.sh | 源码树根目录 |
+| `TARGET_PRODUCT` | lunch | Product 名称，例如 `aosp_arm64` |
+| `TARGET_BUILD_VARIANT` | lunch | 构建变体，例如 `eng`、`userdebug`、`user` |
+| `TARGET_RELEASE` | lunch | Release 配置 |
+| `TARGET_BUILD_TYPE` | lunch | 固定为 `release` |
+| `TARGET_BUILD_APPS` | tapas / banchan | 独立 app / APEX 名称 |
+| `ANDROID_PRODUCT_OUT` | lunch | 设备输出目录路径 |
+| `ANDROID_HOST_OUT` | lunch | host 工具输出目录 |
+| `ANDROID_BUILD_TOP` | envsetup.sh | 与 TOP 相同，已不推荐 |
+| `ANDROID_JAVA_HOME` | lunch | JDK 路径 |
+| `OUT_DIR` | 用户可选设置 | 覆盖默认输出目录，默认是 `out` |
+| `USE_CCACHE` | 用户可选设置 | 是否启用 ccache |
+| `CCACHE_DIR` | 用户可选设置 | ccache 目录位置 |
+| `SOONG_DELVE` | 用户可选设置 | soong_build 的调试端口 |
+| `SOONG_UI_DELVE` | 用户可选设置 | soong_ui 的调试端口 |
+| `NINJA_STATUS` | 用户可选设置 | 自定义 Ninja 状态格式 |
+
+### 2.11.3 `cc_library` 常见 Android.bp 属性
+
+| 属性 | 类型 | 用途 |
+|----------|------|---------|
+| `name` | string | 模块名，必须唯一 |
+| `srcs` | string 列表 | 源文件，支持 glob |
+| `exclude_srcs` | string 列表 | 从 `srcs` 中排除的文件 |
+| `generated_sources` | string 列表 | 产出源码的模块 |
+| `generated_headers` | string 列表 | 产出头文件的模块 |
+| `cflags` | string 列表 | C/C++ 编译器 flag |
+| `cppflags` | string 列表 | 仅 C++ 的编译 flag |
+| `conlyflags` | string 列表 | 仅 C 的编译 flag |
+| `asflags` | string 列表 | 汇编 flag |
+| `ldflags` | string 列表 | 链接器 flag |
+| `shared_libs` | string 列表 | 共享库依赖 |
+| `static_libs` | string 列表 | 静态库依赖 |
+| `whole_static_libs` | string 列表 | 整库打包的静态库 |
+| `header_libs` | string 列表 | 仅头文件依赖 |
+| `runtime_libs` | string 列表 | 仅运行时依赖的共享库 |
+| `local_include_dirs` | string 列表 | 私有 include 路径 |
+| `export_include_dirs` | string 列表 | 公共 include 路径 |
+| `export_shared_lib_headers` | string 列表 | 传递导出头文件 |
+| `stl` | string | C++ STL 选择 |
+| `host_supported` | bool | 是否也构建 host 版本 |
+| `device_supported` | bool | 是否构建设备版本，默认 true |
+| `vendor` | bool | 是否安装到 vendor 分区 |
+| `vendor_available` | bool | 是否可供 vendor 模块使用 |
+| `recovery_available` | bool | 是否可在 recovery 使用 |
+| `apex_available` | string 列表 | 可进入哪些 APEX |
+| `min_sdk_version` | string | 最低 SDK 版本 |
+| `defaults` | string 列表 | 继承的 defaults 模块 |
+| `visibility` | string 列表 | 可见性规则 |
+| `enabled` | bool | 是否启用该模块 |
+| `arch` | map | 按架构配置的属性 |
+| `target` | map | 按目标类型配置的属性，例如 android / host |
+| `multilib` | map | 多库位配置，例如 lib32 / lib64 |
+| `sanitize` | map | Sanitizer 配置 |
+| `strip` | map | strip 配置 |
+| `pack_relocations` | bool | 是否压缩 relocation，默认 true |
+| `allow_undefined_symbols` | bool | 是否允许未定义符号 |
+| `nocrt` | bool | 不链接 C runtime startup |
+| `no_libcrt` | bool | 不链接 compiler runtime |
+| `stubs` | map | 生成版本化 stub |
+| `vndk` | map | VNDK 配置 |
+
+### 2.11.4 `android_app` 常见 Android.bp 属性
+
+| 属性 | 类型 | 用途 |
+|----------|------|---------|
+| `name` | string | 模块名 |
+| `srcs` | string 列表 | Java/Kotlin 源文件 |
+| `resource_dirs` | string 列表 | Android 资源目录 |
+| `asset_dirs` | string 列表 | Asset 目录 |
+| `manifest` | string | AndroidManifest.xml 路径 |
+| `static_libs` | string 列表 | 静态 Java 库依赖 |
+| `libs` | string 列表 | 仅编译期依赖 |
+| `platform_apis` | bool | 是否使用平台隐藏 API |
+| `certificate` | string | 签名证书 |
+| `privileged` | bool | 是否作为特权应用安装 |
+| `overrides` | string 列表 | 它替代哪些应用 |
+| `required` | string 列表 | 必须一并安装的模块 |
+| `dex_preopt` | map | DEX 预优化配置 |
+| `optimize` | map | ProGuard / R8 优化配置 |
+| `aaptflags` | string 列表 | 额外 AAPT flag |
+| `package_name` | string | 覆盖包名 |
+| `sdk_version` | string | 构建时使用的 SDK 版本 |
+| `min_sdk_version` | string | 最低 SDK 版本 |
+| `target_sdk_version` | string | 目标 SDK 版本 |
+| `uses_libs` | string 列表 | 共享库依赖 |
+| `optional_uses_libs` | string 列表 | 可选共享库依赖 |
+| `jni_libs` | string 列表 | JNI 原生库 |
+| `use_resource_processor` | bool | 是否启用资源处理器 |
+| `javac_shard_size` | int | 每个 javac shard 的文件数 |
+| `errorprone` | map | Error-prone 检查器配置 |
+
+### 2.11.5 目录结构速查
+
+| 路径 | 内容 |
+|------|----------|
+| `art/` | Android Runtime，例如 ART VM、dex2oat |
+| `bionic/` | C 库，例如 libc、libm、libdl 与 linker |
+| `bootable/` | Recovery 与 bootloader 相关库 |
+| `build/blueprint/` | Blueprint 元构建框架 |
+| `build/make/` | 基于 Make 的构建系统与 product 配置 |
+| `build/soong/` | Soong 构建系统（Go） |
+| `build/pesto/` | Bazel 集成实验 |
+| `build/release/` | Release 配置 |
+| `cts/` | Compatibility Test Suite |
+| `dalvik/` | Dalvik VM 遗留内容 |
+| `development/` | 开发工具与示例 |
+| `device/` | 设备配置 |
+| `device/generic/goldfish/` | Goldfish 模拟器设备 |
+| `device/google/cuttlefish/` | Cuttlefish 虚拟设备 |
+| `external/` | 第三方项目，700+ 仓库 |
+| `frameworks/base/` | 核心 Android framework |
+| `frameworks/native/` | Native framework，例如 SurfaceFlinger、Binder |
+| `frameworks/av/` | 音视频框架 |
+| `hardware/interfaces/` | HIDL / AIDL HAL 定义 |
+| `kernel/` | 内核构建配置与预构建件 |
+| `libcore/` | 核心 Java 库，基于 OpenJDK |
+| `packages/apps/` | 系统应用 |
+| `packages/modules/` | Mainline 模块（APEX） |
+| `packages/providers/` | Content Provider |
+| `packages/services/` | 系统服务 |
+| `prebuilts/` | 预构建工具，例如 Clang、JDK、SDK |
+| `system/core/` | 核心系统工具，例如 init、adb、logcat |
+| `system/extras/` | 额外系统工具 |
+| `system/sepolicy/` | SELinux 策略 |
+| `tools/` | 开发工具 |
+| `vendor/` | Vendor 特定代码 |
+
+---
+## 2.12 构建系统术语表
+
+| 术语 | 定义 |
+|------|-----------|
+| **ABI** | Application Binary Interface，也就是二进制层接口，规定数据类型、尺寸、对齐、调用约定与系统调用号。 |
+| **AIDL** | Android Interface Definition Language，用于定义系统组件之间稳定的 IPC 接口。 |
+| **Android.bp** | Soong 使用的 Blueprint 文件格式。它是一种声明式、近似 JSON 的模块定义语法。 |
+| **Android.mk** | 遗留的 Make 模块定义格式。仍可使用，但正在逐步退出。 |
+| **APEX** | Android Pony EXpress，可独立更新系统组件的容器格式。 |
+| **Blueprint** | Soong 底层的元构建框架，用于解析模块定义并生成 Ninja manifest。 |
+| **BoardConfig.mk** | 设备级配置文件，用于定义架构、分区尺寸和硬件特性。 |
+| **bp2build** | 把 `Android.bp` 转换成 Bazel `BUILD` 文件的工具，是 Soong 向 Bazel 迁移的重要桥梁。 |
+| **bpfmt** | Blueprint 文件格式化器，可以把它理解为 Android.bp 的 gofmt。 |
+| **Context** | Blueprint 中的中心状态对象，负责串起四个构建阶段。 |
+| **Cuttlefish** | 面向云环境的 Android 虚拟设备，是 Goldfish 的替代方案之一。 |
+| **Dynamic Partitions** | 逻辑分区系统，允许在单个 `super.img` 中灵活分配 system、vendor 等分区空间。 |
+| **GKI** | Generic Kernel Image，同版本设备共享的标准化内核二进制。 |
+| **Goldfish** | 传统 Android 模拟器设备，基于 QEMU。 |
+| **GSI** | Generic System Image，理论上可运行在所有符合 Treble 的设备上的 system.img。 |
+| **HIDL** | Hardware Interface Definition Language，旧式 HAL 接口语言，正在被 AIDL 取代。 |
+| **Kati** | 用 Go 编写、兼容 Make 的构建工具，AOSP 用它替代 GNU Make。 |
+| **Kleaf** | Bazel 化的内核构建系统，名字来自 kernel 与 leaf 的组合。 |
+| **KMI** | Kernel Module Interface，即 GKI 内核与 vendor 模块之间的稳定 ABI。 |
+| **Mainline** | Android 通过 APEX 与 APK 让系统组件经 Play Store 更新的项目。 |
+| **Manifest** | 定义 AOSP 源码树由哪些 Git 仓库组成的 XML 文件。 |
+| **Module** | Soong 中最基本的构建单元，类似 Make 或 Bazel 中的 target。 |
+| **Mutator** | Blueprint 中遍历并修改模块的函数，例如创建架构变体。 |
+| **Ninja** | 快速、低层的构建执行器。Soong 与 Kati 生成 Ninja manifest，由 Ninja 实际执行。 |
+| **PDK** | Platform Development Kit，供硬件合作伙伴做早期 bring-up 的 AOSP 子集。 |
+| **Provider** | Blueprint 在依赖图中于模块之间传递结构化数据的机制。 |
+| **RBE** | Remote Build Execution，把构建 action 分发到集群中执行以加快构建。 |
+| **repo** | 使用 manifest 管理多 Git 仓库的 Python 工具。 |
+| **Soong** | Android 的主构建系统，构建在 Blueprint 之上，处理 `Android.bp` 文件。 |
+| **soong_ui** | 构建系统入口 / 驱动，负责协调 Soong、Kati 与 Ninja。 |
+| **super.img** | 动态分区容器镜像，内部承载 system、vendor、product 等。 |
+| **Treble** | 把 OS framework 与 vendor 代码分离的 Android 架构，是加快升级速度的基础。 |
+| **Variant** | 同一模块的不同构建变体，例如 arm64 shared、arm64 static、x86_64 shared。 |
+| **VNDK** | Vendor Native Development Kit，对 vendor 保证 ABI 稳定的一组系统库。 |
+## 2.13 延伸阅读
+
+### 树内文档
+
+以下文件位于你的 AOSP 检出环境中，适合作为权威参考：
+
+- **`build/soong/README.md`**：完整 Soong 与 Android.bp 参考文档，约 738 行。涵盖模块语法、变量、条件机制、namespace、visibility 与调试。
+- **`build/blueprint/doc.go`**：Blueprint 框架架构总览，解释元构建概念、四阶段流程与 mutator 系统。
+- **`build/make/Changes.md`**：构建系统变更日志，包含废弃变量与迁移指南。
+- **`build/make/README.md`**：Make 层文档与相关链接。
+- **`build/soong/docs/best_practices.md`**：编写 Android.bp 的最佳实践，包括如何移除条件逻辑。
+- **`build/soong/docs/selects.md`**：select 语句，也就是新条件机制的详细文档。
+- **`build/soong/docs/perf.md`**：构建性能优化指南。
+- **`build/soong/docs/compdb.md`**：如何生成 `compile_commands.json`，便于 VSCode、CLion 等 IDE 集成。
+- **`prebuilts/clang/host/linux-x86/kleaf/README.md`**：Kleaf 工具链与内核构建文档。
+
+### 外部资源
+
+- **Android Source website:** https://source.android.com/setup/build
+  官方 AOSP 构建入门指南。
+- **Android Build Cookbook:** https://source.android.com/setup/build/building
+  分步骤构建说明。
+- **APEX documentation:** https://source.android.com/devices/tech/ota/apex
+  官方 APEX 架构与开发指南。
+- **GKI documentation:** https://source.android.com/devices/architecture/kernel/generic-kernel-image
+  Generic Kernel Image 架构说明。
+- **Project Treble:** https://source.android.com/devices/architecture
+  system / vendor 分离架构。
+- **Repo tool repository:** https://gerrit.googlesource.com/git-repo/
+  repo 工具源码与文档。
+- **Ninja build system:** https://ninja-build.org/
+  Ninja 文档与设计理念。
+- **Bazel documentation:** https://bazel.build/
+  Bazel 完整文档。
+- **Gerrit Code Review:** https://android-review.googlesource.com/
+  AOSP 代码评审平台。
+- **Android CI:** https://ci.android.com/
+  持续集成看板，可查看最新构建状态。
+- **Android Code Search:** https://cs.android.com/
+  面向整棵 AOSP 源码树的 Web 代码搜索。
+
+### 生成文档
+
+构建完成后，你还可以获得以下额外资源：
+
+```bash
+# Module type reference (HTML)
+m soong_docs
+# Output: out/soong/docs/soong_build.html
+
+# Module dependency graph (JSON)
+m json-module-graph
+# Output: out/soong/module_graph.json
+
+# Module info database
+m module-info
+# Output: out/target/product/<device>/module-info.json
+
+# Installed file list
+# Output: out/target/product/<device>/installed-files.txt
+```
+## 2.14 动手实践：为模拟器构建 AOSP
 
 这一节给出一步步的实操流程，帮助你从源码构建 AOSP 并在 Android Emulator 中跑起来。这是最快获得一套可工作的 AOSP 环境并开始动手改代码的方式。
 
-### 2.10.1 系统准备
+### 2.14.1 系统准备
 
 **步骤 1：确认前置条件。**
 
@@ -3624,7 +4085,7 @@ mkdir -p ~/aosp
 cd ~/aosp
 ```
 
-### 2.10.2 获取源码
+### 2.14.2 获取源码
 
 **步骤 3：初始化 repo 工作区。**
 
@@ -3650,7 +4111,7 @@ repo sync -c -j$(nproc) --no-tags
 # repo sync -c -j$(nproc) --no-tags --optimized-fetch
 ```
 
-### 2.10.3 设置构建环境
+### 2.14.3 设置构建环境
 
 **步骤 5：加载 `envsetup.sh`。**
 
@@ -3701,7 +4162,7 @@ OUT_DIR=out
 ============================================
 ```
 
-### 2.10.4 发起构建
+### 2.14.4 发起构建
 
 **步骤 7：开始构建。**
 
@@ -3749,7 +4210,7 @@ ls out/target/product/generic_arm64/
 # ...
 ```
 
-### 2.10.5 运行模拟器
+### 2.14.5 运行模拟器
 
 **步骤 9：启动模拟器。**
 
@@ -3786,7 +4247,7 @@ emulator -wipe-data
 emulator -no-window
 ```
 
-### 2.10.6 修改代码并增量重建
+### 2.14.6 修改代码并增量重建
 
 **步骤 10：改动代码并做增量重建。**
 
@@ -3819,7 +4280,7 @@ adb install -r out/target/product/generic_arm64/system/priv-app/Settings/Setting
 adb reboot
 ```
 
-### 2.10.7 调试构建失败
+### 2.14.7 调试构建失败
 
 AOSP 构建失败往往比较吓人，因为代码库太大。下面是几种常见失败类型和对应策略：
 
@@ -3887,7 +4348,7 @@ m clean
 rm -rf out/
 ```
 
-### 2.10.8 调试 Soong 本身
+### 2.14.8 调试 Soong 本身
 
 当你需要理解或修改构建系统自身时，Soong 提供了内建调试支持。
 
@@ -3932,7 +4393,7 @@ m module-info
 
 `module-info.json` 以机器可读形式记录了构建中的每个模块，包括路径、依赖和安装位置。
 
-### 2.10.9 使用 Cuttlefish 替代 Goldfish
+### 2.14.9 使用 Cuttlefish 替代 Goldfish
 
 虽然本章重点介绍的是 Goldfish 模拟器，也就是传统 AOSP Emulator，但 Google 还维护着 **Cuttlefish**，它是一种更适合云环境的虚拟设备：
 
@@ -3959,7 +4420,7 @@ Cuttlefish 的代价：
 - 需要 KVM 支持
 - 普及度不如 Goldfish 模拟器
 
-### 2.10.10 实用开发命令
+### 2.14.10 实用开发命令
 
 在完成 `source build/envsetup.sh` 和 `lunch` 后，可以使用很多便捷命令：
 
@@ -3988,7 +4449,7 @@ showcommands <target>   # Show Ninja commands for a target
 aninja                  # Run Ninja directly with arguments
 ```
 
-### 2.10.11 构建性能优化建议
+### 2.14.11 构建性能优化建议
 
 1. **使用 SSD。** 构建过程中会触发海量小 I/O。SSD 相比 HDD 往往会带来 2 到 5 倍差异。
 
@@ -4016,7 +4477,7 @@ aninja                  # Run Ninja directly with arguments
 
 7. **单模块开发时优先 `mm`。** 处理单个模块时，`mm` 常常比 `m` 快得多，因为它能跳过 Kati 阶段。
 
-### 2.10.12 增量开发工作流
+### 2.14.12 增量开发工作流
 
 日常开发中，典型工作流通常如下：
 
@@ -4092,7 +4553,7 @@ adb reboot
 
 注意：直接 push 文件只适用于 `eng` 或 `userdebug` 构建，因为这类系统通常允许写入 system 分区，或者可以通过 `adb remount` 达成。
 
-### 2.10.13 理解构建输出信息
+### 2.14.13 理解构建输出信息
 
 构建过程中，Soong 会以紧凑格式输出进度。理解这些信息有助于判断构建时间主要花在哪里：
 
@@ -4116,7 +4577,7 @@ adb reboot
 
 在构建过程中按任意键，Ninja 会输出当前活跃 action，从而帮助你定位瓶颈。
 
-### 2.10.14 并行构建配置
+### 2.14.14 并行构建配置
 
 AOSP 构建支持多个层面的并行控制：
 
@@ -4145,191 +4606,7 @@ android_library {
 真正的瓶颈往往是内存，而不只是 CPU。每个编译器实例可能占用 1 到 2 GB 内存，因此在 32 GB 机器上，通常安全的并行编译数大约是 16 个左右。
 
 ---
-
-## 2.11 进阶主题
-
-### 2.11.1 `soong.variables` 桥接文件
-
-Soong 与 Kati 需要共享配置数据，它们之间通过 `out/soong/soong.variables` 这个 JSON 文件通信：它由 Kati 写入，由 Soong 读取。
-
-```json
-{
-    "Platform_sdk_version": 35,
-    "Platform_sdk_codename": "VanillaIceCream",
-    "Platform_version_active_codenames": ["VanillaIceCream"],
-    "DeviceName": "generic_arm64",
-    "DeviceArch": "arm64",
-    "DeviceArchVariant": "armv8-a",
-    "DeviceCpuVariant": "generic",
-    "DeviceSecondaryArch": "",
-    "Aml_abis": ["arm64-v8a"],
-    "Eng": true,
-    "Debuggable": true,
-    ...
-}
-```
-
-这个文件是 Make 世界与 Go 世界之间的桥。你在 `.mk` 文件中改动某个 product 变量时，它就会通过 `soong.variables` 影响 Soong 的行为。
-
-### 2.11.2 ABI 稳定性与 VNDK
-
-Android 构建系统通过多种机制强制执行 **ABI（Application Binary Interface）稳定性**：
-
-- **VNDK（Vendor Native Development Kit）：** 一组对 vendor 保证 ABI 稳定的系统库
-- **AIDL 接口：** system 与 vendor 分区之间的稳定 IPC 接口
-- **HIDL 接口：** 旧式 HAL 接口语言，正在逐步被 AIDL 取代
-- **System SDK：** 提供给 vendor 应用的稳定 Java API
-
-构建系统会跟踪哪些模块属于 VNDK，并强制执行依赖规则：
-
-```go
-// Module that is part of the VNDK
-cc_library {
-    name: "libcutils",
-    vndk: {
-        enabled: true,
-    },
-    ...
-}
-```
-
-Vendor 模块只能依赖 VNDK 库以及它们自己的私有库。任何通过不稳定接口穿越 system / vendor 边界的依赖，构建系统都会直接拒绝。
-
-### 2.11.3 构建标志与特性开关
-
-AOSP 通过 **aconfig** 管理 feature flag：
-
-```go
-// Flag declaration (in .aconfig file)
-package: "com.android.settings.flags"
-
-flag {
-    name: "new_wifi_page"
-    namespace: "settings_ui"
-    description: "Enable the redesigned WiFi settings page"
-    bug: "b/123456789"
-}
-```
-
-这些特性开关会根据 release 配置在构建期解析：
-
-```go
-// Using a flag in Android.bp
-cc_library {
-    name: "libwifi_settings",
-    srcs: select(release_flag("RELEASE_NEW_WIFI_PAGE"), {
-        true: ["new_wifi_page.cpp"],
-        default: ["old_wifi_page.cpp"],
-    }),
-}
-```
-
-这种机制使得同一份源码树可以在不同 release 配置下产出不同构建，而无需维护独立分支。
-
-### 2.11.4 构建系统指标
-
-AOSP 构建系统会采集详细的性能指标：
-
-```bash
-# Build with metrics collection
-m --build-event-log=build_event.log
-
-# View build metrics
-cat out/soong_build_metrics.pb | protoc --decode=...
-```
-
-关键指标包括：
-
-- 总构建时长
-- 各阶段耗时，例如 Soong、Kati、Ninja
-- 处理模块数量
-- 缓存命中率
-- 内存峰值
-- I/O 统计
-
-这些指标对于定位性能瓶颈、跟踪不同版本间的构建优化效果非常有价值。
-
-### 2.11.5 可重复构建
-
-AOSP 一直在追求 reproducible build，也就是在相同源码和相同构建环境下，应该得到完全一致的输出。为此构建系统采取了若干措施：
-
-- **固定时间戳：** 使用确定性时间戳，而不是当前系统时间
-- **排序输入：** 对文件列表与目录遍历结果排序，消除顺序带来的差异
-- **Hermetic 工具链：** 编译器和工具以预构建形式固定在仓库中
-- **沙箱式构建：** Soong 限制对声明输入范围外文件的访问
-- **`BUILD_DATETIME_FILE`：** 在全部构建规则中统一使用固定构建时间
-
-可重复构建对以下场景都很关键：
-
-- 安全审计，例如验证二进制是否与源码一致
-- CI/CD 缓存，例如相同输入应产生相同输出
-- 法规合规，某些市场要求构建可重复
-
-### 2.11.6 构建系统内部机制：模块变体架构
-
-构建系统最复杂的部分之一，就是模块 variant 管理。一个单独的 `cc_library` 声明，最终可能会膨胀成很多个变体：
-
-```mermaid
-graph TB
-    LIB[cc_library: libfoo]
-
-    subgraph "Architecture Variants"
-        ARM64[android_arm64]
-        X86[android_x86_64]
-        HOST[linux_glibc_x86_64]
-    end
-
-    subgraph "Link Type Variants"
-        SHARED[shared]
-        STATIC[static]
-    end
-
-    subgraph "APEX Variants"
-        PLATFORM[platform]
-        WIFI_APEX[com.android.wifi]
-        MEDIA_APEX[com.android.media]
-    end
-
-    subgraph "Sanitizer Variants"
-        NORMAL[normal]
-        ASAN[asan]
-        HWASAN[hwasan]
-    end
-
-    LIB --> ARM64
-    LIB --> X86
-    LIB --> HOST
-
-    ARM64 --> SHARED
-    ARM64 --> STATIC
-
-    SHARED --> PLATFORM
-    SHARED --> WIFI_APEX
-    SHARED --> MEDIA_APEX
-
-    PLATFORM --> NORMAL
-    PLATFORM --> ASAN
-    PLATFORM --> HWASAN
-
-    style LIB fill:#4a90d9,color:#fff
-    style ARM64 fill:#50b848,color:#fff
-    style SHARED fill:#e8a838,color:#fff
-    style PLATFORM fill:#d94a4a,color:#fff
-```
-
-因此，一个单独的 `cc_library` 最终可能扩展成数十个变体，每个变体都会生成自己的二进制。这个扩展过程由 mutator 体系系统化完成：
-
-1. **Architecture mutator：** 按目标架构拆分，例如 arm64、x86_64，同时生成 host 变体
-2. **Link type mutator：** 拆出 shared 和 static 版本
-3. **APEX mutator：** 按模块出现的每个 APEX 拆出对应变体，同时保留 platform 变体
-4. **Sanitizer mutator：** 生成 ASan、TSan、HWSan 等特殊变体
-5. **Image mutator：** 按不同镜像分区继续拆变体
-
-这也是 `out/soong/.intermediates/` 会如此庞大的根本原因，因为它要为每个模块的每个变体单独保存构建产物。
-
----
-
-## Summary
+## 小结
 
 本章覆盖了 AOSP 构建生命周期的完整路径，从获取源码到在模拟器中运行最终产物。关键结论如下：
 
@@ -4403,274 +4680,3 @@ graph LR
 下一章，我们将转向 Android 的运行时架构，去理解这些镜像真正启动到设备上时发生了什么，从 bootloader、`init` 一直到完整运行的 Android 系统。
 
 ---
-
-## 2.12 构建系统参考表
-
-这一节提供便于开发时快速检索的汇总表。
-
-### 2.12.1 常用构建命令总表
-
-| 命令 | 用途 | 示例 |
-|---------|---------|---------|
-| `source build/envsetup.sh` | 初始化构建环境 | 每个终端会话运行一次 |
-| `lunch <target>` | 选择构建目标 | `lunch aosp_arm64` |
-| `m` | 从树根构建 | `m` 或 `m droid` |
-| `m <module>` | 构建指定模块 | `m Settings` |
-| `m <image>` | 构建指定镜像 | `m systemimage` |
-| `mm` | 构建当前目录 | `cd frameworks/base && mm` |
-| `mmm <dir>` | 构建指定目录 | `mmm packages/apps/Settings` |
-| `m clean` | 删除输出目录 |  |
-| `m nothing` | 仅运行构建准备逻辑 | 适合检查配置 |
-| `m soong_docs` | 生成模块文档 | 输出到 `out/soong/docs/` |
-| `m json-module-graph` | 生成模块图 |  |
-| `m module-info` | 生成模块索引 |  |
-| `atest <test>` | 运行测试 | `atest SettingsTests` |
-| `croot` | `cd` 到源码树根目录 |  |
-| `gomod <module>` | `cd` 到模块源码目录 | `gomod Settings` |
-| `pathmod <module>` | 打印模块源码路径 | `pathmod Settings` |
-| `outmod <module>` | 打印模块输出路径 | `outmod Settings` |
-| `allmod` | 列出全部模块 |  |
-| `refreshmod` | 刷新模块索引 |  |
-| `printconfig` | 显示当前构建配置 |  |
-| `get_build_var <var>` | 打印构建变量 | `get_build_var TARGET_PRODUCT` |
-| `showcommands <target>` | 显示构建命令 |  |
-| `bpfmt -w .` | 格式化 Android.bp 文件 |  |
-| `androidmk Android.mk` | 将 mk 转为 bp |  |
-| `tapas <app>` | 构建独立应用 | `tapas Camera eng` |
-| `banchan <apex>` | 构建独立 APEX | `banchan com.android.wifi arm64` |
-
-### 2.12.2 关键环境变量
-
-| 变量 | 设置者 | 用途 |
-|----------|--------|---------|
-| `TOP` | envsetup.sh | 源码树根目录 |
-| `TARGET_PRODUCT` | lunch | Product 名称，例如 `aosp_arm64` |
-| `TARGET_BUILD_VARIANT` | lunch | 构建变体，例如 `eng`、`userdebug`、`user` |
-| `TARGET_RELEASE` | lunch | Release 配置 |
-| `TARGET_BUILD_TYPE` | lunch | 固定为 `release` |
-| `TARGET_BUILD_APPS` | tapas / banchan | 独立 app / APEX 名称 |
-| `ANDROID_PRODUCT_OUT` | lunch | 设备输出目录路径 |
-| `ANDROID_HOST_OUT` | lunch | host 工具输出目录 |
-| `ANDROID_BUILD_TOP` | envsetup.sh | 与 TOP 相同，已不推荐 |
-| `ANDROID_JAVA_HOME` | lunch | JDK 路径 |
-| `OUT_DIR` | 用户可选设置 | 覆盖默认输出目录，默认是 `out` |
-| `USE_CCACHE` | 用户可选设置 | 是否启用 ccache |
-| `CCACHE_DIR` | 用户可选设置 | ccache 目录位置 |
-| `SOONG_DELVE` | 用户可选设置 | soong_build 的调试端口 |
-| `SOONG_UI_DELVE` | 用户可选设置 | soong_ui 的调试端口 |
-| `NINJA_STATUS` | 用户可选设置 | 自定义 Ninja 状态格式 |
-
-### 2.12.3 `cc_library` 常见 Android.bp 属性
-
-| 属性 | 类型 | 用途 |
-|----------|------|---------|
-| `name` | string | 模块名，必须唯一 |
-| `srcs` | string 列表 | 源文件，支持 glob |
-| `exclude_srcs` | string 列表 | 从 `srcs` 中排除的文件 |
-| `generated_sources` | string 列表 | 产出源码的模块 |
-| `generated_headers` | string 列表 | 产出头文件的模块 |
-| `cflags` | string 列表 | C/C++ 编译器 flag |
-| `cppflags` | string 列表 | 仅 C++ 的编译 flag |
-| `conlyflags` | string 列表 | 仅 C 的编译 flag |
-| `asflags` | string 列表 | 汇编 flag |
-| `ldflags` | string 列表 | 链接器 flag |
-| `shared_libs` | string 列表 | 共享库依赖 |
-| `static_libs` | string 列表 | 静态库依赖 |
-| `whole_static_libs` | string 列表 | 整库打包的静态库 |
-| `header_libs` | string 列表 | 仅头文件依赖 |
-| `runtime_libs` | string 列表 | 仅运行时依赖的共享库 |
-| `local_include_dirs` | string 列表 | 私有 include 路径 |
-| `export_include_dirs` | string 列表 | 公共 include 路径 |
-| `export_shared_lib_headers` | string 列表 | 传递导出头文件 |
-| `stl` | string | C++ STL 选择 |
-| `host_supported` | bool | 是否也构建 host 版本 |
-| `device_supported` | bool | 是否构建设备版本，默认 true |
-| `vendor` | bool | 是否安装到 vendor 分区 |
-| `vendor_available` | bool | 是否可供 vendor 模块使用 |
-| `recovery_available` | bool | 是否可在 recovery 使用 |
-| `apex_available` | string 列表 | 可进入哪些 APEX |
-| `min_sdk_version` | string | 最低 SDK 版本 |
-| `defaults` | string 列表 | 继承的 defaults 模块 |
-| `visibility` | string 列表 | 可见性规则 |
-| `enabled` | bool | 是否启用该模块 |
-| `arch` | map | 按架构配置的属性 |
-| `target` | map | 按目标类型配置的属性，例如 android / host |
-| `multilib` | map | 多库位配置，例如 lib32 / lib64 |
-| `sanitize` | map | Sanitizer 配置 |
-| `strip` | map | strip 配置 |
-| `pack_relocations` | bool | 是否压缩 relocation，默认 true |
-| `allow_undefined_symbols` | bool | 是否允许未定义符号 |
-| `nocrt` | bool | 不链接 C runtime startup |
-| `no_libcrt` | bool | 不链接 compiler runtime |
-| `stubs` | map | 生成版本化 stub |
-| `vndk` | map | VNDK 配置 |
-
-### 2.12.4 `android_app` 常见 Android.bp 属性
-
-| 属性 | 类型 | 用途 |
-|----------|------|---------|
-| `name` | string | 模块名 |
-| `srcs` | string 列表 | Java/Kotlin 源文件 |
-| `resource_dirs` | string 列表 | Android 资源目录 |
-| `asset_dirs` | string 列表 | Asset 目录 |
-| `manifest` | string | AndroidManifest.xml 路径 |
-| `static_libs` | string 列表 | 静态 Java 库依赖 |
-| `libs` | string 列表 | 仅编译期依赖 |
-| `platform_apis` | bool | 是否使用平台隐藏 API |
-| `certificate` | string | 签名证书 |
-| `privileged` | bool | 是否作为特权应用安装 |
-| `overrides` | string 列表 | 它替代哪些应用 |
-| `required` | string 列表 | 必须一并安装的模块 |
-| `dex_preopt` | map | DEX 预优化配置 |
-| `optimize` | map | ProGuard / R8 优化配置 |
-| `aaptflags` | string 列表 | 额外 AAPT flag |
-| `package_name` | string | 覆盖包名 |
-| `sdk_version` | string | 构建时使用的 SDK 版本 |
-| `min_sdk_version` | string | 最低 SDK 版本 |
-| `target_sdk_version` | string | 目标 SDK 版本 |
-| `uses_libs` | string 列表 | 共享库依赖 |
-| `optional_uses_libs` | string 列表 | 可选共享库依赖 |
-| `jni_libs` | string 列表 | JNI 原生库 |
-| `use_resource_processor` | bool | 是否启用资源处理器 |
-| `javac_shard_size` | int | 每个 javac shard 的文件数 |
-| `errorprone` | map | Error-prone 检查器配置 |
-
-### 2.12.5 目录结构速查
-
-| 路径 | 内容 |
-|------|----------|
-| `art/` | Android Runtime，例如 ART VM、dex2oat |
-| `bionic/` | C 库，例如 libc、libm、libdl 与 linker |
-| `bootable/` | Recovery 与 bootloader 相关库 |
-| `build/blueprint/` | Blueprint 元构建框架 |
-| `build/make/` | 基于 Make 的构建系统与 product 配置 |
-| `build/soong/` | Soong 构建系统（Go） |
-| `build/pesto/` | Bazel 集成实验 |
-| `build/release/` | Release 配置 |
-| `cts/` | Compatibility Test Suite |
-| `dalvik/` | Dalvik VM 遗留内容 |
-| `development/` | 开发工具与示例 |
-| `device/` | 设备配置 |
-| `device/generic/goldfish/` | Goldfish 模拟器设备 |
-| `device/google/cuttlefish/` | Cuttlefish 虚拟设备 |
-| `external/` | 第三方项目，700+ 仓库 |
-| `frameworks/base/` | 核心 Android framework |
-| `frameworks/native/` | Native framework，例如 SurfaceFlinger、Binder |
-| `frameworks/av/` | 音视频框架 |
-| `hardware/interfaces/` | HIDL / AIDL HAL 定义 |
-| `kernel/` | 内核构建配置与预构建件 |
-| `libcore/` | 核心 Java 库，基于 OpenJDK |
-| `packages/apps/` | 系统应用 |
-| `packages/modules/` | Mainline 模块（APEX） |
-| `packages/providers/` | Content Provider |
-| `packages/services/` | 系统服务 |
-| `prebuilts/` | 预构建工具，例如 Clang、JDK、SDK |
-| `system/core/` | 核心系统工具，例如 init、adb、logcat |
-| `system/extras/` | 额外系统工具 |
-| `system/sepolicy/` | SELinux 策略 |
-| `tools/` | 开发工具 |
-| `vendor/` | Vendor 特定代码 |
-
----
-
-## 构建系统术语表
-
-| 术语 | 定义 |
-|------|-----------|
-| **ABI** | Application Binary Interface，也就是二进制层接口，规定数据类型、尺寸、对齐、调用约定与系统调用号。 |
-| **AIDL** | Android Interface Definition Language，用于定义系统组件之间稳定的 IPC 接口。 |
-| **Android.bp** | Soong 使用的 Blueprint 文件格式。它是一种声明式、近似 JSON 的模块定义语法。 |
-| **Android.mk** | 遗留的 Make 模块定义格式。仍可使用，但正在逐步退出。 |
-| **APEX** | Android Pony EXpress，可独立更新系统组件的容器格式。 |
-| **Blueprint** | Soong 底层的元构建框架，用于解析模块定义并生成 Ninja manifest。 |
-| **BoardConfig.mk** | 设备级配置文件，用于定义架构、分区尺寸和硬件特性。 |
-| **bp2build** | 把 `Android.bp` 转换成 Bazel `BUILD` 文件的工具，是 Soong 向 Bazel 迁移的重要桥梁。 |
-| **bpfmt** | Blueprint 文件格式化器，可以把它理解为 Android.bp 的 gofmt。 |
-| **Context** | Blueprint 中的中心状态对象，负责串起四个构建阶段。 |
-| **Cuttlefish** | 面向云环境的 Android 虚拟设备，是 Goldfish 的替代方案之一。 |
-| **Dynamic Partitions** | 逻辑分区系统，允许在单个 `super.img` 中灵活分配 system、vendor 等分区空间。 |
-| **GKI** | Generic Kernel Image，同版本设备共享的标准化内核二进制。 |
-| **Goldfish** | 传统 Android 模拟器设备，基于 QEMU。 |
-| **GSI** | Generic System Image，理论上可运行在所有符合 Treble 的设备上的 system.img。 |
-| **HIDL** | Hardware Interface Definition Language，旧式 HAL 接口语言，正在被 AIDL 取代。 |
-| **Kati** | 用 Go 编写、兼容 Make 的构建工具，AOSP 用它替代 GNU Make。 |
-| **Kleaf** | Bazel 化的内核构建系统，名字来自 kernel 与 leaf 的组合。 |
-| **KMI** | Kernel Module Interface，即 GKI 内核与 vendor 模块之间的稳定 ABI。 |
-| **Mainline** | Android 通过 APEX 与 APK 让系统组件经 Play Store 更新的项目。 |
-| **Manifest** | 定义 AOSP 源码树由哪些 Git 仓库组成的 XML 文件。 |
-| **Module** | Soong 中最基本的构建单元，类似 Make 或 Bazel 中的 target。 |
-| **Mutator** | Blueprint 中遍历并修改模块的函数，例如创建架构变体。 |
-| **Ninja** | 快速、低层的构建执行器。Soong 与 Kati 生成 Ninja manifest，由 Ninja 实际执行。 |
-| **PDK** | Platform Development Kit，供硬件合作伙伴做早期 bring-up 的 AOSP 子集。 |
-| **Provider** | Blueprint 在依赖图中于模块之间传递结构化数据的机制。 |
-| **RBE** | Remote Build Execution，把构建 action 分发到集群中执行以加快构建。 |
-| **repo** | 使用 manifest 管理多 Git 仓库的 Python 工具。 |
-| **Soong** | Android 的主构建系统，构建在 Blueprint 之上，处理 `Android.bp` 文件。 |
-| **soong_ui** | 构建系统入口 / 驱动，负责协调 Soong、Kati 与 Ninja。 |
-| **super.img** | 动态分区容器镜像，内部承载 system、vendor、product 等。 |
-| **Treble** | 把 OS framework 与 vendor 代码分离的 Android 架构，是加快升级速度的基础。 |
-| **Variant** | 同一模块的不同构建变体，例如 arm64 shared、arm64 static、x86_64 shared。 |
-| **VNDK** | Vendor Native Development Kit，对 vendor 保证 ABI 稳定的一组系统库。 |
-
-## Further Reading
-
-### 树内文档
-
-以下文件位于你的 AOSP 检出环境中，适合作为权威参考：
-
-- **`build/soong/README.md`**：完整 Soong 与 Android.bp 参考文档，约 738 行。涵盖模块语法、变量、条件机制、namespace、visibility 与调试。
-- **`build/blueprint/doc.go`**：Blueprint 框架架构总览，解释元构建概念、四阶段流程与 mutator 系统。
-- **`build/make/Changes.md`**：构建系统变更日志，包含废弃变量与迁移指南。
-- **`build/make/README.md`**：Make 层文档与相关链接。
-- **`build/soong/docs/best_practices.md`**：编写 Android.bp 的最佳实践，包括如何移除条件逻辑。
-- **`build/soong/docs/selects.md`**：select 语句，也就是新条件机制的详细文档。
-- **`build/soong/docs/perf.md`**：构建性能优化指南。
-- **`build/soong/docs/compdb.md`**：如何生成 `compile_commands.json`，便于 VSCode、CLion 等 IDE 集成。
-- **`prebuilts/clang/host/linux-x86/kleaf/README.md`**：Kleaf 工具链与内核构建文档。
-
-### 外部资源
-
-- **Android Source website:** https://source.android.com/setup/build
-  官方 AOSP 构建入门指南。
-- **Android Build Cookbook:** https://source.android.com/setup/build/building
-  分步骤构建说明。
-- **APEX documentation:** https://source.android.com/devices/tech/ota/apex
-  官方 APEX 架构与开发指南。
-- **GKI documentation:** https://source.android.com/devices/architecture/kernel/generic-kernel-image
-  Generic Kernel Image 架构说明。
-- **Project Treble:** https://source.android.com/devices/architecture
-  system / vendor 分离架构。
-- **Repo tool repository:** https://gerrit.googlesource.com/git-repo/
-  repo 工具源码与文档。
-- **Ninja build system:** https://ninja-build.org/
-  Ninja 文档与设计理念。
-- **Bazel documentation:** https://bazel.build/
-  Bazel 完整文档。
-- **Gerrit Code Review:** https://android-review.googlesource.com/
-  AOSP 代码评审平台。
-- **Android CI:** https://ci.android.com/
-  持续集成看板，可查看最新构建状态。
-- **Android Code Search:** https://cs.android.com/
-  面向整棵 AOSP 源码树的 Web 代码搜索。
-
-### 生成文档
-
-构建完成后，你还可以获得以下额外资源：
-
-```bash
-# Module type reference (HTML)
-m soong_docs
-# Output: out/soong/docs/soong_build.html
-
-# Module dependency graph (JSON)
-m json-module-graph
-# Output: out/soong/module_graph.json
-
-# Module info database
-m module-info
-# Output: out/target/product/<device>/module-info.json
-
-# Installed file list
-# Output: out/target/product/<device>/installed-files.txt
-```
-

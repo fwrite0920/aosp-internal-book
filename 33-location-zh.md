@@ -290,6 +290,14 @@ void addLocationProviderManager(
 
 删除 provider 则会清除 mock / real provider 并停止 manager。
 
+#### 添加 Provider
+
+provider 加入时会注册能力、权限、状态监听和 manager 关系。
+
+#### 移除 Provider
+
+provider 移除时需要同步清理注册、请求和缓存状态。
+
 ### 33.2.4 请求处理
 
 应用调用 `requestLocationUpdates()` 后，流转大致如下：
@@ -601,6 +609,12 @@ graph TB
     GLP --> HAL["IGnss HAL"]
 ```
 
+#### PSDS（预测卫星数据服务）
+
+#### 通过 RIL 实现 AGNSS
+
+#### 时间与位置注入
+
 ### 33.3.6 `GnssNative` JNI 桥
 
 框架侧和 HAL 的 Java 入口是 `GnssNative`：
@@ -658,7 +672,7 @@ private static final long MAX_RETRY_INTERVAL = 4 * 60 * 60 * 1000;
 private static final long MAX_BATCH_LENGTH_MS = DateUtils.DAY_IN_MILLIS;
 ```
 
-#### GPS 占空比
+GPS 占空比:
 
 当请求间隔大于 `GPS_POLLING_THRESHOLD_INTERVAL`（10 秒）时，GNSS provider 会进入 duty cycle：
 
@@ -677,7 +691,7 @@ stateDiagram-v2
 
 这套机制的目标很直接：定位周期较长时，不值得一直点亮 GNSS 硬件。
 
-#### 位置 extras
+位置 extras:
 
 GNSS fix 的 extras 里还会附带：
 
@@ -687,7 +701,7 @@ GNSS fix 的 extras 里还会附带：
 
 供诊断或 UI 显示用。
 
-#### 关键行为
+关键行为:
 
 1. 优先尝试 `MS_BASED`
 2. HAL 请求时下载并注入 PSDS
@@ -696,7 +710,7 @@ GNSS fix 的 extras 里还会附带：
 5. 车机场景可 suspend GNSS
 6. HAL 支持时走 batching
 
-#### PSDS 下载流程
+PSDS 下载流程:
 
 ```mermaid
 sequenceDiagram
@@ -716,7 +730,7 @@ sequenceDiagram
     GN->>HAL: inject
 ```
 
-#### 运营商配置
+运营商配置:
 
 `GnssConfiguration` 会从多个来源加载配置：
 
@@ -735,6 +749,20 @@ sequenceDiagram
 | `ES_EXTENSION_SEC` | 紧急会话扩展 |
 | `NFW_PROXY_APPS` | 非框架可见性代理应用 |
 | `ENABLE_PSDS_PERIODIC_DOWNLOAD` | 周期性 PSDS 刷新 |
+
+#### Provider 属性
+
+#### 关键时序常量
+
+#### GPS 占空比控制
+
+#### Location Extras 附加信息
+
+#### PSDS 下载流程
+
+#### Carrier 配置集成
+
+#### 网络发起的位置请求
 
 ### 33.3.8 `GnssManagerService`
 

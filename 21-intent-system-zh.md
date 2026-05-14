@@ -445,125 +445,123 @@ Intent redirect 漏洞常见于应用把外部传入 Intent 原样转发到内�
 
 ## 21.10 动手实践
 
-### Exercise 21.1: 用 adb 检查 Intent 字段
+### 练习 21.1：用 adb 检查 Intent 字段
 
 ```bash
-# Launch an explicit intent
-# Launch an implicit intent with action and data
-# Send a broadcast
-# Send an ordered broadcast
-# View broadcast delivery with verbose logging
+# 启动显式 intent
+# 使用 action 和 data 启动隐式 intent
+# 发送广播
+# 发送有序广播
+# 通过 verbose 日志查看广播投递
 ```
 
-### Exercise 21.2: 探索 Intent 解析
+### 练习 21.2：探索 Intent 解析
 
 ```bash
-# Query which activities handle a specific intent
-# Resolve a specific URL
-# List all intent filters for a package
-# Check preferred activities (default apps)
+# 查询哪些 activity 处理特定 intent
+# 解析特定 URL
+# 列出某个 package 的全部 intent filter
+# 检查 preferred activity，即默认应用
 ```
 
-### Exercise 21.3: 检查广播队列状态
+### 练习 21.3：检查广播队列状态
 
 ```bash
-# Dump the entire broadcast system state
-# Watch broadcasts in real-time
-# Send a test broadcast and observe delivery
-# This will fail with SecurityException - it's a protected broadcast!
-# Send a non-protected broadcast
+# 导出整个广播系统状态
+# 实时观察广播
+# 发送测试广播并观察投递
+# 受保护广播会触发 SecurityException
+# 发送非受保护广播
 ```
 
-### Exercise 21.4: 验证 App Links
+### 练习 21.4：验证 App Links
 
 ```bash
-# Check domain verification state for a package
-# Manually trigger verification
-# Reset verification state
-# Approve a domain manually for testing
+# 检查某个 package 的域名验证状态
+# 手动触发验证
+# 重置验证状态
+# 为测试手动批准域名
 ```
 
-### Exercise 21.5: 在源码中追踪 Intent 解析
+### 练习 21.5：在源码中追踪 Intent 解析
 
 建议从 `IntentResolver`、`PackageManagerService`、`IntentFilter.match()` 和 AMS/ATMS 调用链开始。
 
-### Exercise 21.6: PendingIntent 检查
+### 练习 21.6：检查 PendingIntent
 
 ```bash
-# List all pending intents in the system
-# Create a test PendingIntent via an alarm
-# Inspect PendingIntent records
+# 列出系统中的全部 pending intent
+# 通过 alarm 创建测试 PendingIntent
+# 检查 PendingIntent record
 ```
 
-### Exercise 21.7: 跨 Profile Intent 转发
+### 练习 21.7：跨 Profile Intent 转发
 
 ```bash
-# List cross-profile intent filters (requires root or work profile)
-# Check which intents forward between profiles
-# On a device with work profile (user 10):
+# 列出 cross-profile intent filter，需要 root 或 work profile
+# 检查哪些 intent 会在 profile 间转发
+# 在带 work profile 的设备上，通常为 user 10
 ```
 
-### Exercise 21.8: 构建自定义 IntentFilter 测试器
+### 练习 21.8：构建自定义 IntentFilter 测试器
 
 编写小工具批量构造 action/category/data 组合，验证 match 结果与优先级排序。
 
-### Exercise 21.9: Protected Broadcast 审计
+### 练习 21.9：审计 Protected Broadcast
 
 ```bash
-# Find all protected broadcasts declared in the platform
-# Search for protected broadcasts across all system packages
-# Attempt to send a protected broadcast (will fail from shell on user builds)
-# Expected: Security exception for non-system sender
+# 查找平台声明的全部 protected broadcast
+# 在所有系统 package 中搜索 protected broadcast
+# 尝试发送 protected broadcast，user build 上 shell 会失败
+# 预期结果：非系统发送方触发 SecurityException
 ```
 
-### Exercise 21.10: Intent Redirect 漏洞检测
+### 练习 21.10：检测 Intent Redirect 漏洞
 
 ```bash
-# Find potential intent redirect patterns
-# Find startActivity calls on extras
+# 查找潜在 intent redirect 模式
+# 查找基于 extras 调用 startActivity 的位置
 ```
 
-### Exercise 21.11: 监控广播投递时间
+### 练习 21.11：监控广播投递时间
 
 ```bash
-# Trigger a configuration change and monitor broadcast timing
-# Immediately dump broadcast state
-# Look for timing data:
-# enqueueTime: when the broadcast was queued
-# dispatchTime: when delivery began
-# finishTime: when the last receiver completed
-# receiverTime: per-receiver start time
-# Reset
+# 触发配置变更并监控广播耗时
+# 立即导出广播状态
+# 查找 timing data：
+# enqueueTime：广播入队时间
+# dispatchTime：投递开始时间
+# finishTime：最后一个 receiver 完成时间
+# receiverTime：单个 receiver 的开始时间
+# 重置状态
 ```
 
-### Exercise 21.12: IntentFilter 匹配质量分析
+### 练习 21.12：分析 IntentFilter 匹配质量
 
 通过构造不同 scheme、type、authority、path 组合，观察 match quality 常量变化。
 
-### Exercise 21.13: 调试 PendingIntent 等价性
+### 练习 21.13：调试 PendingIntent 等价性
 
 重点观察 requestCode、flags 与 `filterEquals()` 对 identity 的影响。
 
-### Exercise 21.14: 阅读 Intent 源码
+### 练习 21.14：阅读 Intent 源码
 
 从 `Intent.java`、`IntentFilter.java`、`PendingIntentRecord` 和广播队列实现入手。
 
-### Exercise 21.15: 构建广播投递监视器
+### 练习 21.15：构建广播投递监视器
 
 实现一个小工具记录广播发送时间、投递时间和接收器完成时间，用于识别慢广播。
 
-### Exercise 21.16: 验证导出组件安全
+### 练习 21.16：验证导出组件安全
 
 ```bash
-# Find all exported components
-# Find components with intent filters but no permission
-# Find broadcast receivers without permission protection
-# Find services that are exported
+# 查找全部 exported component
+# 查找带 intent filter 但缺少 permission 的 component
+# 查找缺少 permission 保护的 broadcast receiver
+# 查找已 exported 的 service
 ```
 
-## Summary
-
-## 总结
+## 小结
 
 Intent 系统是 Android 组件解耦和跨进程交互的基础设施，其核心组成如下：
 
@@ -577,11 +575,11 @@ Intent 系统是 Android 组件解耦和跨进程交互的基础设施，其核�
 | App Links | 把 Web 域名与应用能力绑定 |
 | Cross-Profile Resolver | 处理多 profile Intent 转发 |
 
-### Architectural Overview
+### 架构概览
 
 Intent 体系围绕“语义描述 → 组件发现 → 权限与策略检查 → 最终投递”展开，是 Android 高度解耦架构的重要代表。
 
-### Key Takeaways
+### 关键要点
 
 - 显式 Intent 更确定，隐式 Intent 更灵活。
 - `IntentFilter.match()` 是解析核心。

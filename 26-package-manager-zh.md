@@ -141,21 +141,21 @@ public final class DexOptHelper {
 
 `META-INF/` 保存的是 v1（JAR 签名）方案相关信息。现代 Android 实际支持多代 APK 签名机制：
 
-#### v1：JAR Signing
+#### v1：JAR 签名
 
 它会对 ZIP 内每个文件做摘要，记录在 `MANIFEST.MF` 中，再对 `MANIFEST.MF` 签名生成 `CERT.SF` 与 `CERT.RSA`。
 
 缺陷是：它没有完整保护 ZIP 元数据，因此出现过 Janus 之类漏洞。
 
-#### v2：Full APK Signing（Android 7.0+）
+#### v2：完整 APK 签名（Android 7.0+）
 
 v2 签名对整个 APK 二进制 blob 做摘要和签名，把签名块插入 APK 中间位置。这使得几乎任何对 APK 内容或结构的修改都会破坏签名。
 
-#### v3：Key Rotation（Android 9.0+）
+#### v3：密钥轮换（Android 9.0+）
 
 v3 在 v2 的基础上加入 **签名密钥轮换** 支持，通过 proof-of-rotation 链保存旧证书到新证书的信任关系，从而允许开发者更换签名密钥后仍能继续更新已安装应用。
 
-#### v4：Incremental（Android 11+）
+#### v4：增量签名（Android 11+）
 
 v4 面向增量安装，生成单独 `.idsig` 文件，内部带有 Merkle Tree 哈希，允许系统边下载边校验 APK 数据块。
 
@@ -1602,9 +1602,129 @@ adb shell dumpsys overlay
 
 ---
 
-## 26.9 动手实践（Try It）
+## 26.9 App Hibernation
 
-### 26.9.1 检查 APK 结构
+App hibernation 用于处理长期未使用应用。长期闲置的应用不仅占空间，还可能保留多余运行时权限。`AppHibernationService` 会和 `PermissionController`、PMS、AMS 协同，把闲置应用降到低资源状态，并回收部分资源。
+
+> **源码根目录：**
+> `frameworks/base/services/core/java/com/android/server/apphibernation/`
+
+### 26.9.1 架构概览
+
+```mermaid
+graph TD
+    PC["PermissionController<br/>(策略引擎)"] -->|"setHibernatingForUser()"| AHS["AppHibernationService"]
+    AHS -->|"forceStopPackage()"| AMS["ActivityManagerService"]
+    AHS -->|"deleteApplicationCacheFiles()"| PMS["PackageManagerService"]
+    AHS -->|"StorageStats 查询"| SSM["StorageStatsManager"]
+    AHS -->|"持久化状态"| Disk["HibernationStateDiskStore"]
+    AHS -->|"StatsLog"| Stats["FrameworkStatsLog"]
+```
+
+这里的重要设计点是：
+
+- **策略** 主要由 `PermissionController` 决定
+- **状态管理与执行** 由 `AppHibernationService` 完成
+
+### 26.9.2 两级休眠状态
+
+休眠状态有两层：
+
+| 层级 | 类 | 范围 | 优化内容 |
+|------|----|------|----------|
+| 用户级 | `UserLevelState` | 每个 `(package, user)` | force-stop、缓存清理 |
+| 全局级 | `GlobalLevelState` | 整个 package | OAT/编译产物级优化 |
+
+只有当应用对**所有用户**都处于休眠状态时，才会进入全局级 hibernation。
+
+### 26.9.3 休眠流程
+
+当策略侧决定某应用应休眠时，服务会：
+
+1. 通过 AMS `forceStopPackage()`
+2. 通过 PMS 删除缓存文件
+3. 查询 `StorageStatsManager` 记录节省字节数
+4. 持久化状态
+5. 上报指标
+
+### 26.9.4 解除休眠与唤醒
+
+当检测到用户再次使用休眠应用时，系统会：
+
+1. 取消 hibernated 状态
+2. 发送 `LOCKED_BOOT_COMPLETED`
+3. 发送 `BOOT_COMPLETED`
+4. 让应用重新注册 alarm、job、WorkManager 等任务
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant USS as UsageStatsService
+    participant AHS as AppHibernationService
+    participant AMS as ActivityManagerService
+
+    User->>USS: 使用应用
+    USS->>AHS: onUsageEvent()
+    AHS->>AHS: setHibernatingForUser(false)
+    AHS->>AMS: broadcast LOCKED_BOOT_COMPLETED
+    AHS->>AMS: broadcast BOOT_COMPLETED
+```
+
+### 26.9.5 与 Permission Auto-Revoke 的集成
+
+App Hibernation 与权限自动撤销共享一套“长期未使用应用”策略来源，但它们不是同一个功能：
+
+- Auto-Revoke：撤销运行时权限
+- Hibernation：回收资源、降低活跃度
+
+### 26.9.6 DeviceConfig 与特性开关
+
+该服务受 `DeviceConfig` 特性位控制，例如：
+
+```java
+static final String KEY_APP_HIBERNATION_ENABLED = "app_hibernation_enabled";
+```
+
+关闭后，对外接口通常会直接返回默认结果。
+
+### 26.9.7 持久化与开机流程
+
+休眠状态通过 `HibernationStateDiskStore` 和 protobuf 结构持久化。全局状态通常在 `PHASE_BOOT_COMPLETED` 后异步恢复；用户级状态则常在用户解锁后懒加载。
+
+### 26.9.8 包生命周期事件
+
+服务会监听：
+
+- `ACTION_PACKAGE_ADDED`
+- `ACTION_PACKAGE_REMOVED`
+
+以同步更新内部状态表：
+
+- 新装包：创建默认非休眠状态
+- 卸载包：清理状态
+- 替换包：通常保留原休眠信息
+
+### 26.9.9 调试 App Hibernation
+
+```bash
+# 查看应用是否休眠
+adb shell cmd app_hibernation is-hibernating <package> --user 0
+
+# 手动设置休眠
+adb shell cmd app_hibernation set-hibernating <package> --user 0 true
+
+# 查看节省空间统计
+adb shell cmd app_hibernation get-hibernation-stats --user 0
+
+# 查看 DeviceConfig 开关
+adb shell device_config get app_hibernation app_hibernation_enabled
+```
+
+---
+
+## 26.10 动手实践
+
+### 26.10.1 检查 APK 结构
 
 使用 `unzip`、`aapt2`、`apksigner` 分析一个系统 APK：
 
@@ -1615,7 +1735,7 @@ $ aapt2 dump badging /system/app/Calculator/Calculator.apk
 $ aapt2 dump resources /system/app/Calculator/Calculator.apk | head -50
 ```
 
-### 26.9.2 查询包信息
+### 26.10.2 查询包信息
 
 ```bash
 $ adb shell pm list packages
@@ -1626,7 +1746,7 @@ $ adb shell pm path com.android.settings
 $ adb shell pm list permissions -g -d
 ```
 
-### 26.9.3 安装与管理包
+### 26.10.3 安装与管理包
 
 ```bash
 $ adb install app.apk
@@ -1646,7 +1766,7 @@ $ adb shell pm uninstall -k com.example.app
 $ adb shell pm clear com.example.app
 ```
 
-### 26.9.4 权限操作
+### 26.10.4 权限操作
 
 ```bash
 $ adb shell pm grant com.example.app android.permission.CAMERA
@@ -1655,7 +1775,7 @@ $ adb shell dumpsys package com.example.app | grep "CAMERA"
 $ adb shell pm reset-permissions com.example.app
 ```
 
-### 26.9.5 Intent 解析检查
+### 26.10.5 Intent 解析检查
 
 ```bash
 $ adb shell pm resolve-activity --brief "android.intent.action.VIEW" -d "https://www.example.com"
@@ -1663,7 +1783,7 @@ $ adb shell pm query-activities --brief "android.intent.action.SEND" -t "text/pl
 $ adb shell dumpsys package preferred-activities
 ```
 
-### 26.9.6 Overlay 操作
+### 26.10.6 Overlay 操作
 
 ```bash
 $ adb shell cmd overlay list
@@ -1674,7 +1794,7 @@ $ adb shell cmd overlay dump
 
 也可以手写一个最小 overlay APK，覆盖系统主题颜色并安装启用。
 
-### 26.9.7 dumpsys 探索
+### 26.10.7 dumpsys 探索
 
 ```bash
 $ adb shell dumpsys package > pms-dump.txt
@@ -1684,7 +1804,7 @@ $ adb shell dumpsys package preferred
 $ adb shell dumpsys overlay
 ```
 
-### 26.9.8 Split APK 练习
+### 26.10.8 Split APK 练习
 
 ```bash
 $ bundletool build-apks --bundle=my-app.aab --output=my-app.apks --connected-device
@@ -1695,7 +1815,7 @@ $ adb shell pm path com.example.app
 
 也可通过 `--inherit` session 动态追加新的 feature split。
 
-### 26.9.9 包数据库探索
+### 26.10.9 包数据库探索
 
 如果设备可 root，可直接拉取和分析：
 
@@ -1705,7 +1825,7 @@ $ adb shell pm path com.example.app
 
 结合 `logcat -s PackageManager:I PackageInstaller:I` 可以实时观察安装和扫描日志。
 
-### 26.9.10 性能分析
+### 26.10.10 性能分析
 
 重点关注：
 
@@ -1714,7 +1834,7 @@ $ adb shell pm path com.example.app
 - `dumpsys package checkin`
 - Intent 解析的 verbose log
 
-### 26.9.11 高级：追踪 PMS 行为
+### 26.10.11 高级：追踪 PMS 行为
 
 可以通过 trace 抓取 PMS 的关键阶段，例如：
 
@@ -1729,7 +1849,7 @@ $ adb install large-app.apk
 $ adb shell atrace --async_stop -z -c -b 16384 pm > trace.ctrace
 ```
 
-### 26.9.12 高级：构建并测试 PMS 修改
+### 26.10.12 高级：构建并测试 PMS 修改
 
 在 AOSP 源码树中：
 
@@ -1749,7 +1869,7 @@ $ atest CtsPackageInstallTestCases
 
 等入口打断点。
 
-### 26.9.13 高级：Overlay 开发流程
+### 26.10.13 高级：Overlay 开发流程
 
 完整流程通常包括：
 
@@ -1762,7 +1882,7 @@ $ atest CtsPackageInstallTestCases
 7. 安装并启用
 8. 验证效果并清理
 
-### 26.9.14 排查常见 PMS 问题
+### 26.10.14 排查常见 PMS 问题
 
 安装失败时，应优先关注：
 
@@ -1787,127 +1907,7 @@ $ adb shell appops get com.example.app
 
 ---
 
-## 26.10 App Hibernation
-
-App hibernation 用于处理长期未使用应用。长期闲置的应用不仅占空间，还可能保留多余运行时权限。`AppHibernationService` 会和 `PermissionController`、PMS、AMS 协同，把闲置应用降到低资源状态，并回收部分资源。
-
-> **源码根目录：**
-> `frameworks/base/services/core/java/com/android/server/apphibernation/`
-
-### 26.10.1 架构概览
-
-```mermaid
-graph TD
-    PC["PermissionController<br/>(策略引擎)"] -->|"setHibernatingForUser()"| AHS["AppHibernationService"]
-    AHS -->|"forceStopPackage()"| AMS["ActivityManagerService"]
-    AHS -->|"deleteApplicationCacheFiles()"| PMS["PackageManagerService"]
-    AHS -->|"StorageStats 查询"| SSM["StorageStatsManager"]
-    AHS -->|"持久化状态"| Disk["HibernationStateDiskStore"]
-    AHS -->|"StatsLog"| Stats["FrameworkStatsLog"]
-```
-
-这里的重要设计点是：
-
-- **策略** 主要由 `PermissionController` 决定
-- **状态管理与执行** 由 `AppHibernationService` 完成
-
-### 26.10.2 两级休眠状态
-
-休眠状态有两层：
-
-| 层级 | 类 | 范围 | 优化内容 |
-|------|----|------|----------|
-| 用户级 | `UserLevelState` | 每个 `(package, user)` | force-stop、缓存清理 |
-| 全局级 | `GlobalLevelState` | 整个 package | OAT/编译产物级优化 |
-
-只有当应用对**所有用户**都处于休眠状态时，才会进入全局级 hibernation。
-
-### 26.10.3 休眠流程
-
-当策略侧决定某应用应休眠时，服务会：
-
-1. 通过 AMS `forceStopPackage()`
-2. 通过 PMS 删除缓存文件
-3. 查询 `StorageStatsManager` 记录节省字节数
-4. 持久化状态
-5. 上报指标
-
-### 26.10.4 解除休眠与唤醒
-
-当检测到用户再次使用休眠应用时，系统会：
-
-1. 取消 hibernated 状态
-2. 发送 `LOCKED_BOOT_COMPLETED`
-3. 发送 `BOOT_COMPLETED`
-4. 让应用重新注册 alarm、job、WorkManager 等任务
-
-```mermaid
-sequenceDiagram
-    participant User
-    participant USS as UsageStatsService
-    participant AHS as AppHibernationService
-    participant AMS as ActivityManagerService
-
-    User->>USS: 使用应用
-    USS->>AHS: onUsageEvent()
-    AHS->>AHS: setHibernatingForUser(false)
-    AHS->>AMS: broadcast LOCKED_BOOT_COMPLETED
-    AHS->>AMS: broadcast BOOT_COMPLETED
-```
-
-### 26.10.5 与 Permission Auto-Revoke 的集成
-
-App Hibernation 与权限自动撤销共享一套“长期未使用应用”策略来源，但它们不是同一个功能：
-
-- Auto-Revoke：撤销运行时权限
-- Hibernation：回收资源、降低活跃度
-
-### 26.10.6 DeviceConfig 与特性开关
-
-该服务受 `DeviceConfig` 特性位控制，例如：
-
-```java
-static final String KEY_APP_HIBERNATION_ENABLED = "app_hibernation_enabled";
-```
-
-关闭后，对外接口通常会直接返回默认结果。
-
-### 26.10.7 持久化与开机流程
-
-休眠状态通过 `HibernationStateDiskStore` 和 protobuf 结构持久化。全局状态通常在 `PHASE_BOOT_COMPLETED` 后异步恢复；用户级状态则常在用户解锁后懒加载。
-
-### 26.10.8 包生命周期事件
-
-服务会监听：
-
-- `ACTION_PACKAGE_ADDED`
-- `ACTION_PACKAGE_REMOVED`
-
-以同步更新内部状态表：
-
-- 新装包：创建默认非休眠状态
-- 卸载包：清理状态
-- 替换包：通常保留原休眠信息
-
-### 26.10.9 调试 App Hibernation
-
-```bash
-# 查看应用是否休眠
-adb shell cmd app_hibernation is-hibernating <package> --user 0
-
-# 手动设置休眠
-adb shell cmd app_hibernation set-hibernating <package> --user 0 true
-
-# 查看节省空间统计
-adb shell cmd app_hibernation get-hibernation-stats --user 0
-
-# 查看 DeviceConfig 开关
-adb shell device_config get app_hibernation app_hibernation_enabled
-```
-
----
-
-## 总结（Summary）
+## 小结
 
 PMS 是 Android 应用生态的骨架。下面这个总图概括了它与其他子系统的关系：
 
@@ -1989,7 +1989,7 @@ graph TB
 - **Split APK**：base、config、feature split 和依赖加载机制支撑了 App Bundle 与动态特性交付。
 - **Overlay 系统**：OMS、idmap、overlayable 和 fabricated overlay 支撑了运行时主题与资源覆盖。
 
-### 设计哲学与演进
+### 设计理念与演进
 
 PMS 并不是一开始就有今天的形态：
 

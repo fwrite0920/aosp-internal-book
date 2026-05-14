@@ -1,85 +1,85 @@
 # 第 7 章：Bionic 与动态链接器
 
-Android 不使用 GNU C Library（glibc）。它使用的是 **Bionic**，这是一个从一开始就面向移动设备设计的自定义 C 库。本章从源码层面深入讲解 Bionic 的架构、系统调用接口、负责加载 Android 上每个 native 二进制文件的动态链接器，以及在库加载层面执行 Treble 架构边界的 VNDK 命名空间隔离。
+Android 不使用 GNU C Library (glibc)。相反，它依赖于 **Bionic**，这是一个专为移动设备设计的自定义 C 库。本章将对 Bionic 的架构、系统调用接口、加载 Android 上每个原生二进制文件的动态链接器以及在库加载层面执行 Treble 架构边界的 VNDK 命名空间隔离进行深入的源码级剖析。
 
-Android 上的每个 native 进程，从启动系统的 init daemon，到你刚刚启动的应用，都会经过本章分析的代码。相关源码位于 AOSP 树的 `bionic/` 下，支撑基础设施位于 `system/linkerconfig/` 和 `build/soong/cc/`。
+Android 上的每个原生进程——从启动系统的 init 守护进程到你刚刚启动的应用——都会经过这里分析的代码。源码位于 AOSP 树中的 `bionic/` 下，支撑基础设施位于 `system/linkerconfig/` 和 `build/soong/cc/` 中。
 
 ---
 
 ## 7.1 Bionic：Android 的 C 库
 
-### 7.1.1 为什么不用 glibc？
+### 7.1.1 为什么不使用 glibc？
 
-选择创建新的 C 库而不是采用 glibc，是 Android 历史上最早也最重要的决策之一。原因既有法律层面，也有技术层面：
+选择创建新的 C 库而不是采用 glibc 是 Android 历史上最早也最重要的决策之一。原因既有法律层面，也有技术层面：
 
-1. **许可证。** glibc 使用 LGPL。虽然 LGPL 允许动态链接且不把 copyleft 义务传递给调用代码，但 Android 团队希望为设备制造商和应用开发者消除任何不确定性。Bionic 使用三条款 BSD 许可证，对下游使用几乎不施加限制。
+1. **许可证。** glibc 使用 LGPL 许可证。虽然 LGPL 允许动态链接而不会对调用代码施加 copyleft 义务，但 Android 团队希望消除设备制造商和应用开发者的任何歧义。Bionic 使用三条款 BSD 许可证，对下游使用几乎没有任何限制。
 
-2. **体积。** glibc 面向通用 Linux 系统，支持大量 locale、完整国际化机制、NSS（Name Service Switch）模块，以及丰富 GNU 扩展。在闪存和 RAM 受限的移动设备上，这些开销并不合适。Bionic 移除了 Android 不需要的一切。
+2. **体积。** glibc 是为通用 Linux 系统设计的。它支持数十种语言环境、广泛的国际化机制、NSS (Name Service Switch) 模块和丰富的 GNU 扩展。在闪存和 RAM 受限的移动设备上，这些开销是不受欢迎的。Bionic 剔除了 Android 不需要的一切。
 
-3. **启动速度。** 每个 Android 应用都从 Zygote 进程 fork 而来，许多 native daemon 也会在启动期间运行。动态链接和 C 库初始化耗时会被数百个进程放大。Bionic 为快速启动设计：动态链接器精简，初始化路径短，TLS 布局在编译期固定，而不是运行时计算。
+3. **启动速度。** 每个 Android 应用都从 Zygote 进程 fork 而来，许多原生守护进程在启动期间运行。执行动态链接和 C 库初始化的时间会被数百个进程放大。Bionic 专为快速启动而设计：它的动态链接器精简，初始化路径短，线程局部存储 (TLS) 布局在编译时固定，而不是在运行时计算。
 
-4. **Android 专用能力。** Bionic 直接集成 Android 属性系统、日志基础设施（liblog）、安全模型（Zygote fork 时施加的 seccomp-BPF 过滤器）和内存分配器（Scudo）。把这些能力接入 glibc 需要大量补丁。
+4. **Android 专用特性。** Bionic 直接集成了 Android 的属性系统、日志基础设施 (liblog)、安全模型 (在 Zygote fork 时应用的 seccomp-BPF 过滤器) 和内存分配器 (Scudo)。这些集成如果使用 glibc 则需要大量的补丁。
 
-5. **线程模型。** Bionic 的 pthread 实现与 Linux 内核线程原语（clone、futex、robust mutex）紧密耦合，并省略了 Android 不使用的 POSIX thread cancellation 等能力。
+5. **线程模型。** Bionic 的 pthread 实现与 Linux 内核的线程原语 (clone, futex, robust mutexes) 紧密耦合，并省略了 Android 不使用的 POSIX 线程取消 (thread cancellation) 等特性。
 
 ### 7.1.2 源码树布局
 
 Bionic C 库源码位于：
 
-```text
+```
 bionic/libc/
 ```
 
-该目录包含 38 个顶层条目，最重要的如下：
+该目录包含 38 个顶层条目。最重要的包括：
 
 | 目录 | 用途 |
 |-----------|---------|
-| `bionic/` | 核心 C 库实现（261 个 `.cpp` 文件） |
+| `bionic/` | 核心 C 库实现 (261 个 .cpp 文件) |
 | `arch-arm/` | ARM 32 位汇编和架构专属代码 |
-| `arch-arm64/` | AArch64 汇编、IFUNC resolver、Oryon 优化 |
+| `arch-arm64/` | AArch64 汇编、IFUNC 解析器、Oryon 优化 |
 | `arch-x86/` | x86 32 位代码 |
 | `arch-x86_64/` | x86-64 代码 |
 | `arch-riscv64/` | RISC-V 64 位代码 |
-| `arch-common/` | 架构无关汇编 helper |
+| `arch-common/` | 架构无关汇编辅助代码 |
 | `include/` | 暴露给 NDK 的公共 C 库头文件 |
-| `kernel/` | 清洗后的 Linux 内核头文件 |
-| `private/` | libc 与 linker 共享的内部头文件 |
+| `kernel/` | 经过清洗的 Linux 内核头文件 |
+| `private/` | libc 和链接器共享的内部头文件 |
 | `seccomp/` | Seccomp-BPF 策略生成与安装 |
 | `stdio/` | 标准 I/O 实现 |
-| `dns/` | DNS resolver（精简版 NetBSD resolver） |
+| `dns/` | DNS 解析器 (精简版 NetBSD 解析器) |
 | `upstream-freebsd/` | 从 FreeBSD 导入的代码 |
 | `upstream-netbsd/` | 从 NetBSD 导入的代码 |
 | `upstream-openbsd/` | 从 OpenBSD 导入的代码 |
-| `async_safe/` | async-signal-safe 日志与格式化 |
+| `async_safe/` | 异步信号安全日志记录与格式化 |
 | `system_properties/` | Android 属性系统客户端 |
-| `tools/` | 代码生成脚本（`gensyscalls.py`、`genseccomp.py`） |
-| `tzcode/` | 时区处理（来自 IANA tz database） |
-| `platform/` | 平台专属头文件 |
-| `memory/` | Memory Tagging Extension（MTE）支持 |
+| `tools/` | 代码生成脚本 (gensyscalls.py, genseccomp.py) |
+| `tzcode/` | 时区处理 (来自 IANA tz 数据库) |
+| `platform/` | 平台专用头文件 |
+| `memory/` | 内存标记支持 (MTE) |
 
-### 7.1.3 核心库：`bionic/libc/bionic/`
+### 7.1.3 核心库：bionic/libc/bionic/
 
-`bionic/libc/bionic/` 是 C 库核心，包含 261 个源文件，实现从 `malloc()` 到 `pthread_create()` 的各类能力。
+`bionic/libc/bionic/` 目录是 C 库的核心。它包含 261 个源文件，实现了从 `malloc()` 到 `pthread_create()` 的一切。关键文件包括：
 
 **进程初始化：**
 
-- `libc_init_common.cpp`：静态与动态可执行文件的通用初始化
-- `libc_init_dynamic.cpp`：动态链接可执行文件的初始化路径
-- `libc_init_static.cpp`：静态链接可执行文件的初始化路径
+- `libc_init_common.cpp` —— 静态和动态可执行文件的通用初始化
+- `libc_init_dynamic.cpp` —— 动态链接可执行文件的初始化路径
+- `libc_init_static.cpp` —— 静态链接可执行文件的初始化路径
 
 **线程：**
 
-- `pthread_create.cpp`：线程创建
-- `pthread_mutex.cpp`：mutex 实现，使用 Linux futex
-- `pthread_cond.cpp`：条件变量
-- `pthread_rwlock.cpp`：读写锁
-- `pthread_internal.h`：内部线程状态结构
+- `pthread_create.cpp` —— 线程创建
+- `pthread_mutex.cpp` —— 互斥锁实现 (使用 Linux futex)
+- `pthread_cond.cpp` —— 条件变量
+- `pthread_rwlock.cpp` —— 读写锁
+- `pthread_internal.h` —— 内部线程状态结构
 
 **内存分配：**
 
-- `malloc_common.cpp`：allocator dispatch 层
+- `malloc_common.cpp` —— 分配器的调度层
 
-`bionic/libc/bionic/malloc_common.cpp` 中的 `calloc()` 展示了 Bionic 内存分配的核心 dispatch 模式：
+摘自 `bionic/libc/bionic/malloc_common.cpp` (第 67-77 行)：
 
 ```cpp
 extern "C" void* calloc(size_t n_elements, size_t elem_size) {
@@ -95,211 +95,644 @@ extern "C" void* calloc(size_t n_elements, size_t elem_size) {
 }
 ```
 
-`GetDispatchTable()` 会检查 debug malloc 或 profiling malloc 是否已安装。若已安装，调用会被重定向；否则通过 `Malloc()` 宏落到默认分配器 Scudo。`MaybeTagPointer()` 调用体现了 Bionic 对 MTE 等内存标记能力的集成。
+这种调度模式是 Bionic 内存分配架构的基础。`GetDispatchTable()` 调用检查是否安装了 debug malloc 或 profiling malloc。如果是，调用将被重定向。否则，它通过 `Malloc()` 宏回退到 Scudo (默认分配器)。`MaybeTagPointer()` 调用在支持它的硬件上实现 MTE (内存标记扩展) 指针标记。
+
+**系统调用包装器：**
+
+- `clone.cpp`, `exec.cpp`, `fork.cpp` —— 进程管理
+- `socket.cpp`, `accept.cpp` —— 网络 I/O
+
+**字符串和内存操作：**
+
+- 通过 IFUNC (间接函数) 调度进行架构优化
+
+**动态库支持：**
+
+- `dl_iterate_phdr_static.cpp` —— 静态可执行文件的 `dl_iterate_phdr`
+- `dlfcn.cpp` —— `dlopen`/`dlsym`/`dlclose` 包装器
 
 ### 7.1.4 进程初始化
 
-动态链接 native 进程的启动路径可以简化为：
+当一个动态链接的可执行文件启动时，内核会映射该可执行文件和动态链接器 (见第 7.3 节)。链接器执行重定位，然后调用 libc 的 `.preinit_array` 条目 `__libc_preinit`。该函数定义在 `bionic/libc/bionic/libc_init_dynamic.cpp` 中，在任何其他共享库初始化程序之前运行：
+
+摘自 `bionic/libc/bionic/libc_init_dynamic.cpp` (第 29-42 行)：
+
+```cpp
+/*
+ * 此源文件为动态可执行文件提供两个重要函数：
+ *
+ * - C 运行时初始化程序 (__libc_preinit)，由动态链接器在加载 libc.so 时调用。
+ *   这发生在任何其他初始化程序 (例如程序依赖的其他共享库中的静态 C++ 构造函数) 之前。
+ *
+ * - 程序启动函数 (__libc_init)，在完成所有动态链接后调用。
+ */
+```
+
+初始化序列如下：
 
 ```mermaid
 sequenceDiagram
-    participant K as Kernel
-    participant L as Linker
-    participant C as Bionic libc
-    participant A as Application
+    participant Kernel as 内核
+    participant Linker as 动态链接器
+    participant LibC as libc.so
+    participant App as 应用程序
 
-    K->>L: 通过 PT_INTERP 进入 linker
-    L->>L: 自重定位
-    L->>L: 加载可执行文件依赖库
-    L->>C: __libc_init()
-    C->>C: 初始化 TLS、pthread、malloc、系统属性
-    C->>A: 调用 main(argc, argv, envp)
+    Kernel->>Linker: 映射 ELF, 转移控制权
+    Linker->>Linker: 自重定位
+    Linker->>Linker: 加载依赖项 (BFS)
+    Linker->>Linker: 重定位所有库
+    Linker->>LibC: 调用 __libc_preinit()
+    LibC->>LibC: 初始化 TLS, 栈保护, 属性
+    Linker->>Linker: 调用所有库的 .init_array
+    Linker->>App: 跳转到入口点
+    App->>LibC: __libc_init()
+    LibC->>App: 调用 main()
 ```
 
-静态链接路径由 `libc_init_static.cpp` 处理；动态链接路径由 `libc_init_dynamic.cpp` 处理。两者最终都会进入通用初始化逻辑，建立 C 运行时需要的线程状态、TLS、环境变量、atexit handler 和 allocator 状态。
+`__libc_preinit_impl` 函数执行以下关键步骤：
 
-### 7.1.5 Thread-Local Storage 与 Bionic TCB
+1. **TLS 生成同步** —— 向链接器注册 libc 的 TLS 生成计数器副本，以便 TLS 模块保持同步。
+2. **全局变量初始化** —— 设置 `__libc_globals`，这是一个包含分配器调度表的可写保护结构。
+3. **通用初始化** —— 调用 `__libc_init_common()`，初始化系统属性客户端，设置 `environ` 指针，并配置堆分配器。
+4. **Netd 客户端初始化** —— 注册 DNS 解析钩子。
+5. **回调注册** —— 为链接器提供 HWASan 库加载/卸载事件和 MTE 栈重映射的回调。
 
-Bionic 的线程局部存储（TLS）布局经过严格设计，目标是让热路径访问尽可能快。每个线程都有一个 Thread Control Block（TCB），其中保存 pthread 内部状态、errno、TLS slot 和架构专属线程指针。
+摘自 `bionic/libc/bionic/libc_init_common.cpp` (第 58-61 行)：
 
-Android 把部分 TLS slot 保留给系统使用，例如：
-
-- `TLS_SLOT_SELF`：指向当前线程自身
-- `TLS_SLOT_THREAD_ID`：线程 ID
-- `TLS_SLOT_ERRNO`：`errno`
-- `TLS_SLOT_OPENGL_API`：OpenGL dispatch
-- `TLS_SLOT_BIONIC_TLS`：Bionic 内部 TLS 数据
-
-固定 TLS 布局减少了运行时查找成本，也让 linker、libc 和 ART 可以共享一套高效线程状态访问模型。
-
-### 7.1.6 架构专属优化
-
-Bionic 在每个 CPU 架构下都提供专属优化实现。AArch64 目录尤其重要：
-
-```text
-bionic/libc/arch-arm64/
-    bionic/         # syscall stub、setjmp、clone 等
-    string/         # memcpy/memmove/memset/strcmp 等优化实现
-    ifuncs.cpp      # IFUNC resolver
+```cpp
+__LIBC_HIDDEN__ constinit WriteProtected<libc_globals> __libc_globals;
+__LIBC_HIDDEN__ constinit _Atomic(bool) __libc_memtag_stack;
+__LIBC_HIDDEN__ constinit bool __libc_memtag_stack_abi;
 ```
 
-IFUNC（indirect function）允许 libc 在运行时根据 CPU feature 选择最优实现。例如同一个 `memcpy()` 可以在不同 ARM 核心上选择不同 NEON 或微架构优化版本。这种优化对 Android 非常重要，因为 Android 设备覆盖大量 SoC 与 CPU 微架构。
+`WriteProtected<>` 模板将全局变量结构映射到通常为只读的内存中。修改需要显式获取 `ProtectedDataGuard`，它会暂时将页面重新映射为可写。这可以防止分配器调度表等关键数据被破坏。
 
-### 7.1.7 上游代码与 BSD 传统
+### 7.1.5 线程局部存储与 Bionic TCB
 
-Bionic 并不是从零实现所有 C 库函数。它大量复用了 BSD 系代码，包括 FreeBSD、NetBSD 和 OpenBSD 的实现。对应目录包括：
+Bionic 的 TLS 实现与内核紧密集成。每个线程都有一个 **线程控制块 (TCB)**，可以通过专用寄存器访问 (AArch64 上为 TPIDR_EL0，x86-64 上为 GS 段)。TCB 布局定义在 `bionic/libc/private/bionic_tls.h` 中。
 
-```text
-bionic/libc/upstream-freebsd/
-bionic/libc/upstream-netbsd/
-bionic/libc/upstream-openbsd/
+摘自 `bionic/libc/bionic/pthread_create.cpp` (第 62-71 行)：
+
+```cpp
+__attribute__((no_stack_protector))
+void __init_tcb_stack_guard(bionic_tcb* tcb) {
+  // GCC 在 x86 上在 TLS 中寻找栈保护，因此从我们的全局变量中将其复制到那里。
+  tcb->tls_slot(TLS_SLOT_STACK_GUARD) = reinterpret_cast<void*>(__stack_chk_guard);
+}
+
+void __init_bionic_tls_ptrs(bionic_tcb* tcb, bionic_tls* tls) {
+  tcb->thread()->bionic_tcb = tcb;
+  tcb->thread()->bionic_tls = tls;
+  tcb->tls_slot(TLS_SLOT_BIONIC_TLS) = tls;
+}
 ```
 
-这种 BSD 传统与 Bionic 的许可证目标一致，也让 Android 可以在保持轻量的同时复用成熟实现。
+关键 TLS 插槽包括：
+
+| 插槽 | 用途 |
+|------|---------|
+| `TLS_SLOT_SELF` | 指向 TCB 自身的指针 |
+| `TLS_SLOT_THREAD_ID` | 用于快速 `gettid()` 的线程 ID |
+| `TLS_SLOT_STACK_GUARD` | 用于 `-fstack-protector` 的栈金丝雀 |
+| `TLS_SLOT_BIONIC_TLS` | 指向完整 `bionic_tls` 结构的指针 |
+| `TLS_SLOT_DTV` | 用于 ELF TLS 的动态线程向量 (Dynamic Thread Vector) |
+| `TLS_SLOT_ART` | 为 Android 运行时 (ART) 保留 |
+
+这种固定布局意味着访问线程局部状态不需要函数调用或哈希表查找——只需寄存器读取和常量偏移量。特别是栈保护金丝雀，在受栈保护的代码中的每个函数入口和出口都会被访问，因此将其放置在固定的 TLS 插槽中对于性能至关重要。
+
+### 7.1.6 架构专用优化
+
+Bionic 为性能关键函数提供架构专用实现。最显著的是字符串和内存操作。
+
+**IFUNC (间接函数) 调度：**
+
+在 AArch64 上，`memcpy`, `memset`, `strcmp` 和 `strlen` 等函数在程序启动时通过 GNU IFUNC 解析器进行调度。解析器检查 CPU 能力并选择最佳实现。
+
+摘自 `bionic/libc/arch-arm64/ifuncs.cpp` (第 36-49, 69-79 行)：
+
+```cpp
+inline int implementer(uint64_t midr_el1) { return (midr_el1 >> 24) & 0xff; }
+inline int variant(uint64_t midr_el1) { return (midr_el1 >> 20) & 0xf; }
+inline int part(uint64_t midr_el1) { return (midr_el1 >> 4) & 0xfff; }
+inline int revision(uint64_t midr_el1) { return (midr_el1 >> 0) & 0xf; }
+
+static inline bool __bionic_is_oryon(unsigned long hwcap) {
+  if (!(hwcap & HWCAP_CPUID)) return false;
+  unsigned long midr;
+  __asm__ __volatile__("mrs %0, MIDR_EL1" : "=r"(midr));
+  return implementer(midr) == 'Q' && part(midr) <= 15;
+}
+
+// ...
+
+DEFINE_IFUNC_FOR(memcpy) {
+  if (arg->_hwcap2 & HWCAP2_MOPS) {
+    RETURN_FUNC(memcpy_func_t, __memmove_aarch64_mops);
+  } else if (__bionic_is_oryon(arg->_hwcap)) {
+    RETURN_FUNC(memcpy_func_t, __memcpy_aarch64_nt);
+  } else if (arg->_hwcap & HWCAP_ASIMD) {
+    RETURN_FUNC(memcpy_func_t, __memcpy_aarch64_simd);
+  } else {
+    RETURN_FUNC(memcpy_func_t, __memcpy_aarch64);
+  }
+}
+```
+
+这段代码展示了 AArch64 的四种 `memcpy` 实现：
+
+1. **MOPS (内存操作)** —— 使用 Armv8.8-A `CPYFE` 指令进行硬件加速内存复制。这是受支持硅片上的最快路径。
+2. **Oryon 非临时 (non-temporal)** —— Qualcomm Oryon 核心 (实施者 'Q', 部件 0-15) 受益于绕过大容量复制缓存层级的非临时存储。实现在 `bionic/libc/arch-arm64/oryon/memcpy-nt.S` 中。
+3. **ASIMD (NEON)** —— 使用 128 位 SIMD 加载/存储对。大多数 AArch64 设备的标准快速路径。
+4. **通用 (Generic)** —— 针对缺乏 ASIMD 的核心的标量回退 (在 AArch64 上是理论上的，但为了完整性而存在)。
+
+类似地，`memchr` 具有 MTE 感知和标准变体：
+
+```cpp
+DEFINE_IFUNC_FOR(memchr) {
+  if (arg->_hwcap2 & HWCAP2_MTE) {
+    RETURN_FUNC(memchr_func_t, __memchr_aarch64_mte);
+  } else {
+    RETURN_FUNC(memchr_func_t, __memchr_aarch64);
+  }
+}
+```
+
+MTE 感知变体必须处理搜索缓冲区中的指针标记不匹配的可能性，需要进行标记剥离比较。
+
+**架构专用汇编文件：**
+
+每个架构目录都包含针对最关键路径的手写汇编：
+
+| 架构 | 关键汇编文件 |
+|-------------|-------------------|
+| `arch-arm64/bionic/` | `syscall.S`, `setjmp.S`, `vfork.S`, `__bionic_clone.S` |
+| `arch-arm64/string/` | `__memcpy_chk.S`, `__memset_chk.S` |
+| `arch-arm64/oryon/` | `memcpy-nt.S`, `memset-nt.S` |
+| `arch-arm/bionic/` | Cortex-A53/A55/A7/A9/A15/Krait/Kryo 特定例程 |
+| `arch-x86_64/bionic/` | `syscall.S`, `setjmp.S` |
+| `arch-x86_64/string/` | SSE/AVX 优化的字符串操作 |
+| `arch-riscv64/bionic/` | `syscall.S`, `setjmp.S` |
+| `arch-riscv64/string/` | RISC-V 字符串操作 |
+
+ARM 32 位树特别丰富，具有针对 Cortex-A53, Cortex-A55, Cortex-A7, Cortex-A9, Cortex-A15, Krait (Qualcomm) 和 Kryo (Qualcomm) 的 CPU 特定子目录。ARM 上的 IFUNC 解析器根据 `/proc/cpuinfo` 或 HWCAP 值在运行时选择这些实现。
+
+### 7.1.7 上游代码与 BSD 传承
+
+Bionic 并非从头开始实现一切。它从三个 BSD 操作系统导入了代码：
+
+- **OpenBSD**：提供了 `strlcpy`, `strlcat`, `arc4random`, `reallocarray` 以及大部分标准字符串库。OpenBSD 对安全性的关注使其成为强化实现的自然来源。
+
+- **FreeBSD**：贡献了部分数学库 (`libm`)、区域设置支持和一些字符串函数。
+
+- **NetBSD**：提供了 DNS 解析器 (`bionic/libc/dns/`) 和一些杂项实用函数。
+
+导入的代码保存在单独的目录中 (`upstream-openbsd/`, `upstream-freebsd/`, `upstream-netbsd/`)，并定期更新以合并上游错误修复和安全补丁。
 
 ### 7.1.8 属性系统客户端
 
-Bionic 中的 `system_properties/` 目录实现了系统属性客户端读取逻辑。它负责映射 `/dev/__properties__/` 下的共享内存区域，查找属性 trie，并提供 `__system_property_find()`、`__system_property_read_callback()` 等 API。
+Android 的属性系统 (`__system_property_get`, `__system_property_set`) 部分是在 Bionic 中实现的。`bionic/libc/system_properties/` 中的客户端代码提供了从映射到每个进程的共享内存区域进行无锁读取的功能。这就是 Android 上的每个进程如何在没有 IPC 开销的情况下读取系统属性的方式。
 
-这一层是第 6 章系统属性机制在 native 侧的入口。属性读取无需 IPC，写入则通过 socket 交给 init 的 property service。
+属性区域在 `__libc_init_common()` 期间初始化：
+
+摘自 `bionic/libc/bionic/libc_init_common.cpp` (第 54 行)：
+
+```cpp
+extern "C" int __system_properties_init(void);
+```
+
+此函数映射属性区域文件 (`/dev/__properties__/`) 并设置用于属性读取的内部数据结构。
 
 ### 7.1.9 Bionic 与 glibc：特性对比
 
 | 特性 | Bionic | glibc |
-|------|--------|-------|
+|---------|--------|-------|
 | 许可证 | BSD | LGPL |
-| 目标平台 | Android / 移动设备 | 通用 Linux |
-| 动态链接器 | Android 专用 linker | `ld-linux.so` |
-| NSS | 精简或无 | 完整 NSS 模块系统 |
-| pthread cancellation | 基本不支持 | 完整 POSIX 支持 |
-| malloc 默认实现 | Scudo | ptmalloc |
-| Android 属性系统 | 原生集成 | 无 |
-| Seccomp 策略 | 与 Zygote 集成 | 无 Android 集成 |
-| linker namespace | 原生支持 | 无 Android Treble 模型 |
+| 体积 (stripped) | ~1 MB | ~8 MB |
+| 区域设置支持 | 最小 (ASCII + UTF-8) | 完整 ICU 级别 |
+| NSS 模块 | 无 | 有 |
+| 线程取消 | 无 | 有 |
+| 栈保护器 | 固定 TLS 插槽 | 可变偏移量 |
+| 默认分配器 | Scudo | ptmalloc2 |
+| 从 APK dlopen | 是 (支持 ZIP 文件) | 否 |
+| `android_dlopen_ext` | 是 | N/A |
+| seccomp 集成 | 内置 | 外部 |
+| 属性系统 | 内置 | N/A |
+| FORTIFY_SOURCE | 增强型 | 标准 |
 
 ### 7.1.10 内存安全特性
 
-Bionic 与 Android 平台集成了多种内存安全能力：
+Bionic 融合了多个没有 glibc 等效项的内存安全特性：
 
-- **Scudo allocator**：默认 hardened allocator，提供 quarantine、checksum 和随机化等保护。
-- **MTE（Memory Tagging Extension）**：AArch64 内存标记支持，用于检测 use-after-free 与越界访问。
-- **HWASan / ASan 集成**：支持 sanitizer 构建和运行时替换库路径。
-- **FORTIFY**：对常见 C 函数调用做编译期与运行时边界检查。
-- **CFI**：部分构建中启用控制流完整性保护。
+**MTE (内存标记扩展)：**
+在 Armv8.5-A 及更高版本的硬件上，Bionic 支持堆和栈内存的 MTE。`arch-arm64/bionic/` 中的 `note_memtag_heap_async.S` 和 `note_memtag_heap_sync.S` 文件包含请求堆分配 MTE 的 ELF 注释。
+
+**Scudo 强化分配器：**
+Bionic 的默认分配器是 Scudo，这是一种安全强化的分配器，提供隔离页 (guard pages)、隔离区 (quarantine zones) 和完整性检查。`malloc_common.cpp` 中的调度机制允许透明地替换 Scudo 为调试分配器。
+
+**GWP-ASan：**
+一种采样分配器，可捕获生产环境中的 use-after-free 和缓冲区溢出错误，通过 `gwp_asan_wrappers.h` 集成。
+
+**FORTIFY_SOURCE：**
+Bionic 的 FORTIFY 实现比 glibc 的更激进，对字符串和内存函数中的缓冲区溢出具有额外的编译时和运行时检查。
+
+**标记指针 (Tagged pointers)：**
+即使没有 MTE 硬件，Bionic 也可以标记堆指针的最高字节 (ARM 上的最高字节忽略 / TBI)，以检测某些类别的内存损坏。
+
+```mermaid
+graph TD
+    A["malloc 调用"] --> B{"调度表?"}
+    B -->|"调试 malloc"| C["调试分配器"]
+    B -->|"正常"| D["Scudo 分配器"]
+    D --> E{"GWP-ASan 采样?"}
+    E -->|"是"| F["GWP-ASan 隔离页分配"]
+    E -->|"否"| G["Scudo 正常分配"]
+    G --> H{"启用 MTE?"}
+    H -->|"是"| I["使用随机标记对内存进行标记"]
+    H -->|"否"| J{"TBI 标记?"}
+    J -->|"是"| K["标记指针的最高字节"]
+    J -->|"否"| L["返回原始指针"]
+    I --> L
+    K --> L
+    F --> L
+    C --> L
+```
 
 ---
 
 ## 7.2 系统调用接口
 
-### 7.2.1 Android 上系统调用如何工作
+### 7.2.1 系统调用在 Android 上如何工作
 
-Bionic 是用户态和 Linux 内核系统调用 ABI 之间的主要封装层。大多数 libc 函数最终会落到一个系统调用 stub。例如 `open()`、`read()`、`write()`、`mmap()`、`futex()` 都会通过架构专属汇编进入内核。
+用户空间代码与 Linux 内核之间的每一次交互都通过系统调用进行。Bionic 提供了该接口的用户空间一半：从用户模式转换到内核模式的薄汇编桩 (stubs)，以及提供 POSIX API 的 C 包装函数。
 
-系统调用路径如下：
+系统调用接口有三层：
 
 ```mermaid
-graph LR
-    A["应用 / daemon"] --> B["Bionic libc API"]
-    B --> C["syscall wrapper"]
-    C --> D["架构专属 syscall 指令<br/>svc / syscall / ecall"]
-    D --> E["Linux kernel"]
+graph TD
+    A["应用程序代码<br/>(例如 open(), read())"] --> B["Bionic C 包装器<br/>(bionic/libc/bionic/*.cpp)"]
+    B --> C["汇编桩<br/>(从 SYSCALLS.TXT 生成)"]
+    C --> D["内核入口<br/>(ARM64 上为 SVC #0)"]
+    D --> E["Linux 内核<br/>系统调用处理程序"]
+
+    style A fill:#e1f5fe
+    style B fill:#f3e5f5
+    style C fill:#fff3e0
+    style D fill:#fce4ec
+    style E fill:#e8f5e9
 ```
 
-### 7.2.2 `SYSCALLS.TXT`：系统调用定义文件
+### 7.2.2 SYSCALLS.TXT：系统调用定义文件
 
-Bionic 的系统调用接口由 `bionic/libc/SYSCALLS.TXT` 驱动。这个文件声明每个 syscall wrapper 的名字、参数、返回类型以及适用架构。
+Bionic 中的所有系统调用桩都是从一个定义文件自动生成的：
 
-典型条目类似：
+**源文件：** `bionic/libc/SYSCALLS.TXT` (384 行)
 
-```text
-int openat(int, const char*, int, mode_t) all
-ssize_t read(int, void*, size_t) all
-int clock_gettime(clockid_t, timespec*) all
+摘自 `bionic/libc/SYSCALLS.TXT` (第 1-14 行)：
+
+```
+# 此文件用于自动生成 bionic 的系统调用桩。
+#
+# 它由名为 gensyscalls.py 的 python 脚本处理，
+# 通常通过 libc/Android.bp 中的 genrules 运行。
+#
+# 每个非空、非注释行具有以下格式：
+#
+#     func_name[|alias_list][:syscall_name[:socketcall_id]]([parameter_list]) arch_list
+#
+# 其中：
+#     arch_list ::= "all" | arches
+#     arches    ::= arch |  arch "," arches
+#     arch      ::= "arm" | "arm64" | "riscv64" | "x86" | "x86_64" | "lp32" | "lp64"
 ```
 
-该文件不是文档，而是代码生成输入。`gensyscalls.py` 读取它并生成 C/C++ 声明、汇编 stub 和相关元数据。这样可以保持不同架构之间的 syscall wrapper 一致。
+SYSCALLS.TXT 中的每一行都描述了一个系统调用，包括其函数名称、可选别名、参数类型以及应在其上生成的架构。该格式支持几种重要的模式：
+
+**直接系统调用映射：**
+```
+read(int, void*, size_t)        all
+write(int, const void*, size_t) all
+```
+
+**重命名的系统调用 (C 名称与内核名称不同)：**
+```
+__close:close(int)  all
+__getpid:getpid()  all
+__openat:openat(int, const char*, int, mode_t) all
+```
+
+`__close:close` 语法意味着“生成一个名为 `__close` 的函数，该函数调用内核的 `close` 系统调用”。应用程序调用的实际 `close()` 函数是 `bionic/libc/bionic/` 中的一个 C 包装器，它在调用 `__close` 之前执行额外的工作 (如 FORTIFY 检查或 fdsan 验证)。
+
+**架构条件系统调用：**
+```
+getuid:getuid32()   lp32
+getuid()            lp64
+```
+
+在 32 位平台 (`lp32`) 上，`getuid` 函数调用内核的 `getuid32` 系统调用 (因为原始 `getuid` 使用 16 位 UID)。在 64 位平台 (`lp64`) 上，它直接调用 `getuid`。
+
+**别名函数：**
+```
+lseek|lseek64(int, off_t, int) lp64
+_exit|_Exit:exit_group(int)    all
+```
+
+管道符号创建共用相同实现的多个符号别名。在 64 位系统上，`lseek` 和 `lseek64` 是相同的，因为 `off_t` 是 64 位的。
+
+**x86 socketcall 多路复用：**
+```
+__socket:socketcall:1(int, int, int) x86
+__connect:socketcall:3(int, struct sockaddr*, socklen_t) x86
+```
+
+在 32 位 x86 上，套接字操作通过单个 `socketcall` 系统调用进行多路复用，带有数字子命令。Bionic 的生成器会自动处理这一点。
 
 ### 7.2.3 系统调用 Stub 生成
 
-生成脚本位于：
+`gensyscalls.py` 脚本 (`bionic/libc/tools/gensyscalls.py`) 读取 SYSCALLS.TXT 并生成架构专用的汇编桩。支持的架构有：
 
-```text
-bionic/libc/tools/gensyscalls.py
+```python
+SupportedArchitectures = [ "arm", "arm64", "riscv64", "x86", "x86_64" ]
 ```
 
-它为不同架构生成对应汇编入口。例如 AArch64 使用 `svc #0` 进入内核，x86-64 使用 `syscall` 指令，RISC-V 使用 `ecall`。
+**ARM 32 位桩 (4 个或更少的寄存器参数)：**
 
-生成 stub 需要处理不同 ABI 的细节：参数寄存器、返回值寄存器、errno 转换、64 位参数对齐，以及 LP32/LP64 命名差异。调用失败时，Linux 返回负 errno，Bionic wrapper 会把它转换成 `-1` 并设置线程局部的 `errno`。
+```asm
+ENTRY(%(func)s)
+    mov     ip, r7
+    .cfi_register r7, ip
+    ldr     r7, =%(NR_name)s
+    swi     #0
+    mov     r7, ip
+    .cfi_restore r7
+    cmn     r0, #(MAX_ERRNO + 1)
+    bxls    lr
+    neg     r0, r0
+    b       __set_errno_internal
+END(%(func)s)
+```
+
+在 ARM 上，系统调用号放在寄存器 r7 中，`SWI` (软件中断) 指令陷波进入内核。该桩保存并恢复 r7 (Thumb 模式下为帧指针)，以避免破坏调用堆栈。
+
+**AArch64 系统调用函数：**
+
+摘自 `bionic/libc/arch-arm64/bionic/syscall.S` (第 31-49 行)：
+
+```asm
+ENTRY(syscall)
+    /* 将系统调用号从 x0 移动到 x8 */
+    mov     x8, x0
+    /* 将系统调用参数从 x1 至 x6 移动到 x0 至 x5 */
+    mov     x0, x1
+    mov     x1, x2
+    mov     x2, x3
+    mov     x3, x4
+    mov     x4, x5
+    mov     x5, x6
+    svc     #0
+
+    /* 检查系统调用是否成功返回 */
+    cmn     x0, #(MAX_ERRNO + 1)
+    cneg    x0, x0, hi
+    b.hi    __set_errno_internal
+
+    ret
+END(syscall)
+```
+
+这是 AArch64 的通用 `syscall()` 函数。系统调用号放在 x8 中，最多六个参数放在 x0-x5 中。`SVC #0` 指令进入内核。返回时，如果 x0 包含 [-MAX_ERRNO, -1] 范围内的值，则错误被取反并通过 `__set_errno_internal` 存储在 `errno` 中。
 
 ### 7.2.4 系统调用目录
 
-`SYSCALLS.TXT` 既包含 POSIX 常用调用，也包含 Android 平台需要的 Linux 专用调用。常见类别如下：
+SYSCALLS.TXT 分几个类别定义系统调用。以下是主要组的分解：
 
-| 类别 | 示例 |
-|------|------|
-| 文件 I/O | `openat`, `read`, `write`, `close`, `lseek` |
-| 内存管理 | `mmap`, `mprotect`, `munmap`, `madvise` |
-| 进程/线程 | `clone`, `fork`, `execve`, `exit`, `wait4` |
-| 同步 | `futex`, `set_robust_list` |
-| 信号 | `rt_sigaction`, `rt_sigprocmask`, `sigaltstack` |
-| 时间 | `clock_gettime`, `nanosleep`, `timerfd_*` |
-| 网络 | `socket`, `connect`, `sendto`, `recvfrom` |
-| Android 关键路径 | `ioctl`（Binder）、`epoll_*`、`eventfd` |
-
-### 7.2.5 LP32 与 LP64 差异
-
-Android 同时支持 32 位和 64 位用户态 ABI。LP32 与 LP64 在类型宽度和 syscall 名称上有差异：
-
-```mermaid
-graph TB
-    subgraph "LP32 (arm/x86)"
-        A1["long = 32 bits"]
-        A2["time_t 历史上为 32 bits"]
-        A3["lseek64 / mmap64 / fstat64"]
-        A4["*_time64 系统调用"]
-    end
-
-    subgraph "LP64 (arm64/x86_64/riscv64)"
-        B1["long = 64 bits"]
-        B2["time_t = 64 bits"]
-        B3["lseek / mmap / fstat"]
-        B4["标准时间调用"]
-    end
+**进程和标识管理：**
+```
+getuid(), getgid(), geteuid(), getegid()
+setuid(), setgid(), setresuid(), setresgid()
+getpid(), getppid(), getpgid(), getsid()
+kill(), tgkill()
+execve(), clone(), _exit()
 ```
 
-32 位系统上许多 syscall 带 `64` 后缀，或者使用寄存器对传递 64 位参数。`SYSCALLS.TXT` 生成器会自动处理这些 ABI 要求，包括 ARM 要求 64 位参数对从偶数寄存器开始这一限制。
+**文件描述符：**
+```
+read(), write(), pread64(), pwrite64()
+__close:close(), __openat:openat()
+__fcntl64:fcntl64() (lp32), __fcntl:fcntl() (lp64)
+__dup:dup(), __dup3:dup3()
+```
 
-`*_time64` 调用用于解决 Y2038 问题：32 位 `time_t` 会在 2038 年 1 月溢出。`clock_gettime64`、`futex_time64` 等调用即使在 32 位平台上也使用 64 位时间结构。
+**内存管理：**
+```
+__mmap2:mmap2() (lp32), mmap|mmap64() (lp64)
+munmap(), mprotect(), madvise(), mremap()
+__brk:brk(), mseal() (lp64 only)
+```
+
+**文件系统：**
+```
+chdir(), mount(), umount2(), getcwd()
+fstatat64(), statx()
+setxattr(), getxattr(), listxattr()
+```
+
+**网络 (按架构)：**
+```
+__socket:socket()              arm,lp64
+__socket:socketcall:1()        x86
+bind(), listen(), __accept4:accept4()
+```
+
+**信号：**
+```
+__rt_sigaction:rt_sigaction()
+__rt_sigprocmask:rt_sigprocmask()
+__rt_sigsuspend:rt_sigsuspend()
+__signalfd4:signalfd4()
+```
+
+**架构专用：**
+```
+__set_tls:__ARM_NR_set_tls(void*)                    arm
+cacheflush:__ARM_NR_cacheflush(long, long, long)     arm
+__riscv_flush_icache:riscv_flush_icache(void*, void*, unsigned long) riscv64
+__set_thread_area:set_thread_area(void*)              x86
+arch_prctl(int, unsigned long)                        x86_64
+```
+
+**VDSO 加速调用：**
+```
+__clock_getres:clock_getres(clockid_t, struct timespec*) all
+__clock_gettime:clock_gettime(clockid_t, struct timespec*) all
+__gettimeofday:gettimeofday(struct timeval*, struct timezone*) all
+```
+
+这三个系统调用通常由 VDSO (虚拟动态共享对象) 处理，内核将其映射到每个进程。VDSO 包含这些调用的用户空间实现，它们从内核管理的共享内存页中读取，避免了完全内核转换的开销。Bionic 的动态链接器显式加载 VDSO (见第 7.3 节)。
+
+### 7.2.5 LP32 与 LP64 的差异
+
+系统调用接口在 32 位和 64 位平台之间存在显著差异：
+
+```mermaid
+graph LR
+    subgraph "LP32 (32 位)"
+        A1["off_t = 32 位<br/>uid_t = 16 位 (历史原因)"]
+        A2["getuid:getuid32()"]
+        A3["lseek() + __llseek()"]
+        A4["__mmap2:mmap2()"]
+        A5["fstat64()"]
+        A6["prlimit64()"]
+        A7["*_time64() 变体"]
+    end
+
+    subgraph "LP64 (64 位)"
+        B1["off_t = 64 位<br/>uid_t = 32 位"]
+        B2["getuid()"]
+        B3["lseek|lseek64()"]
+        B4["mmap|mmap64()"]
+        B5["fstat64|fstat()"]
+        B6["prlimit64|prlimit()"]
+        B7["标准时间调用"]
+    end
+
+    style A1 fill:#fff3e0
+    style B1 fill:#e1f5fe
+```
+
+在 32 位系统上，许多系统调用带有 `64` 后缀，或者使用寄存器对来处理 64 位参数。SYSCALLS.TXT 生成器会自动处理 ABI 要求，包括 ARM 的约束，即 64 位参数对必须从偶数寄存器开始。
+
+`*_time64` 变体 (`SECCOMP_ALLOWLIST_COMMON.TXT` 的第 76-91 行) 尤其值得注意：
+
+```
+clock_gettime64(clockid_t, timespec64*) lp32
+clock_settime64(clockid_t, const timespec64*) lp32
+futex_time64(int*, int, int, const timespec64*, int*, int) lp32
+```
+
+这些是为 Y2038 问题添加的：32 位 `time_t` 在 2038 年 1 月溢出。即使在 32 位平台上，`*_time64` 系统调用也使用 64 位时间结构。
 
 ### 7.2.6 Seccomp-BPF：系统调用过滤
 
-Android 使用 seccomp-BPF 限制应用进程可用的系统调用。这是关键安全边界：即使攻击者在应用进程内获得任意代码执行，也无法调用被 seccomp 过滤器阻止的危险 syscall。
+Android 使用 seccomp-BPF (带有伯克利数据包过滤器的安全计算) 限制应用程序进程可以使用的系统调用。这是一个关键的安全边界：即使攻击者在应用进程内实现了任意代码执行，他们也无法调用 seccomp 过滤器阻止的危险系统调用。
 
 seccomp 策略由多个文本文件构建：
 
 | 文件 | 用途 |
 |------|---------|
-| `SYSCALLS.TXT` | bionic 需要的基础 syscall 集合 |
-| `SECCOMP_ALLOWLIST_COMMON.TXT` | 所有进程额外允许的调用 |
-| `SECCOMP_ALLOWLIST_APP.TXT` | 应用进程额外允许的调用 |
-| `SECCOMP_ALLOWLIST_SYSTEM.TXT` | system server 额外允许的调用 |
-| `SECCOMP_BLOCKLIST_APP.TXT` | 即使在 `SYSCALLS.TXT` 中也要从应用移除的调用 |
-| `SECCOMP_BLOCKLIST_COMMON.TXT` | 所有 Zygote 子进程都要移除的调用 |
-| `SECCOMP_PRIORITY.TXT` | 优先检查的 syscall，用于热路径优化 |
+| `SYSCALLS.TXT` | Bionic 需要的基础系统调用集 |
+| `SECCOMP_ALLOWLIST_COMMON.TXT` | 额外的允许调用 (所有进程) |
+| `SECCOMP_ALLOWLIST_APP.TXT` | 额外的允许调用 (仅限应用进程) |
+| `SECCOMP_ALLOWLIST_SYSTEM.TXT` | 额外的允许调用 (仅限系统服务器) |
+| `SECCOMP_BLOCKLIST_APP.TXT` | 即使在 SYSCALLS.TXT 中也要从应用中移除的调用 |
+| `SECCOMP_BLOCKLIST_COMMON.TXT` | 从所有 Zygote 子进程中移除的调用 |
+| `SECCOMP_PRIORITY.TXT` | 首先检查的系统调用 (热路径优化) |
 
-最终策略公式如下：
+**最终策略的公式：**
 
-```text
-Final Allowlist = SYSCALLS.TXT - BLOCKLIST + ALLOWLIST
+```
+最终允许列表 = SYSCALLS.TXT - 阻断列表 + 允许列表
 ```
 
-应用 blocklist 会移除修改 UID/GID、修改系统时间、挂载文件系统、加载内核模块、重启设备等危险调用。`SECCOMP_PRIORITY.TXT` 把 `futex` 和 `ioctl` 放在最前，因为它们在 Android 进程中调用极其频繁：`futex` 用于 mutex/condvar，`ioctl` 用于 Binder IPC。
+摘自 `bionic/libc/SECCOMP_BLOCKLIST_APP.TXT` (第 1-7 行)：
+
+```
+# 最终的 seccomp 允许列表是 SYSCALLS.TXT - SECCOMP_BLOCKLIST.TXT
+#   + SECCOMP_ALLOWLIST.TXT
+# 阻断列表中的任何条目必须在 syscalls 文件中，且不在
+#   allowlist 文件中
+```
+
+**针对应用的被阻断系统调用：**
+
+`SECCOMP_BLOCKLIST_APP.TXT` 文件 (51 行) 从应用进程中移除了危险的系统调用：
+
+```
+# 修改 ID 的系统调用。
+setgid32(gid_t)     lp32
+setgid(gid_t)       lp64
+setuid32(uid_t)     lp32
+setuid(uid_t)       lp64
+
+# 修改时间的系统调用。
+adjtimex(struct timex*)   all
+clock_adjtime(clockid_t, struct timex*)   all
+clock_settime(clockid_t, const struct timespec*)  all
+settimeofday(const struct timeval*, const struct timezone*)   all
+
+# 危险操作
+chroot(const char*)  all
+init_module(void*, unsigned long, const char*)  all
+delete_module(const char*, unsigned int)   all
+mount(const char*, const char*, const char*, unsigned long, const void*)  all
+reboot(int, int, int, void*)  all
+```
+
+这些是 SYSCALLS.TXT 中存在的系统调用 (因为系统守护进程需要它们)，但对于非特权的应用程序进程来说太危险了。
+
+**通用阻断列表** (`SECCOMP_BLOCKLIST_COMMON.TXT`) 增加了：
+
+```
+swapon(const char*, int) all
+swapoff(const char*) all
+```
+
+**应用允许列表** (`SECCOMP_ALLOWLIST_APP.TXT`, 62 行) 重新启用了应用需要但不在基础 SYSCALLS.TXT 集中的特定调用，通常是为了后向兼容性：
+
+```
+# 调试 32 位 Chrome 需要
+pipe(int pipefd[2])  lp32
+
+# b/34813887
+open(const char *path, int oflag, ... ) lp32,x86_64
+
+# 在 U 中 Bionic 未使用，因为 riscv64 没有它，但
+# 遗留应用仍在使用 (http://b/254179267)。
+renameat(int, const char*, int, const char*)  arm,x86,arm64,x86_64
+```
+
+每个条目都引用了 Android 错误跟踪器 ID，记录了例外存在的原因。
+
+**优先级优化：**
+
+摘自 `bionic/libc/SECCOMP_PRIORITY.TXT` (第 9-10 行)：
+
+```
+futex
+ioctl
+```
+
+在 BPF 过滤器中，这两个系统调用会首先被检查。由于 `futex` 和 `ioctl` 是典型 Android 进程中最频繁调用的系统调用 (`futex` 用于互斥锁/条件变量操作，`ioctl` 用于 Binder IPC)，首先检查它们可以最大限度地减少每个系统调用执行的平均 BPF 指令数。
 
 ### 7.2.7 Seccomp 策略安装
 
-seccomp 过滤器由 Zygote 在 fork 应用进程前安装。实现位于 `bionic/libc/seccomp/seccomp_policy.cpp`。
+seccomp 过滤器在 Zygote 进程 fork 应用进程之前由其安装。实现在 `bionic/libc/seccomp/seccomp_policy.cpp` 中。
 
-过滤器需要处理双架构系统，例如 64 位内核运行 32 位应用。它先检查 seccomp data 中的架构字段，再跳转到对应架构的过滤器：
+过滤器通过检查 seccomp 数据结构中的架构字段并跳转到适当的过滤器，来处理双架构系统 (例如运行 32 位应用的 64 位内核)：
+
+摘自 `bionic/libc/seccomp/seccomp_policy.cpp` (第 33-94 行)：
+
+```cpp
+#if defined __arm__ || defined __aarch64__
+#define PRIMARY_ARCH AUDIT_ARCH_AARCH64
+static const struct sock_filter* primary_app_filter = arm64_app_filter;
+// ...
+#define SECONDARY_ARCH AUDIT_ARCH_ARM
+static const struct sock_filter* secondary_app_filter = arm_app_filter;
+// ...
+#elif defined __i386__ || defined __x86_64__
+#define PRIMARY_ARCH AUDIT_ARCH_X86_64
+// ...
+#define SECONDARY_ARCH AUDIT_ARCH_I386
+// ...
+#elif defined(__riscv)
+#define PRIMARY_ARCH AUDIT_ARCH_RISCV64
+// ...
+#endif
+```
+
+跳转逻辑：
+
+摘自 `bionic/libc/seccomp/seccomp_policy.cpp` (第 128-141 行)：
 
 ```cpp
 static size_t ValidateArchitectureAndJumpIfNeeded(filter& f) {
@@ -311,550 +744,1508 @@ static size_t ValidateArchitectureAndJumpIfNeeded(filter& f) {
 }
 ```
 
-生成的 BPF 过滤器大致如下：
+**BPF 程序结构：**
 
 ```mermaid
 graph TD
-    A["System Call Entry"] --> B{"Check Architecture"}
-    B -->|"Primary 64-bit"| C{"Check Priority Syscalls"}
-    B -->|"Secondary 32-bit"| D{"Check 32-bit Allowlist"}
-    B -->|"Unknown"| E["SECCOMP_RET_TRAP"]
-    C -->|"futex/ioctl"| F["SECCOMP_RET_ALLOW"]
-    C -->|"Other"| G{"Check Allowlist"}
-    G -->|"Allowed"| F
-    G -->|"Denied"| E
-    D -->|"Allowed"| F
-    D -->|"Denied"| E
+    A["系统调用入口"] --> B{"检查架构"}
+    B -->|"主要 64 位"| C{"检查高优先级系统调用"}
+    B -->|"次要 32 位"| D{"检查 32 位高优先级系统调用"}
+    B -->|"未知"| E["SECCOMP_RET_TRAP"]
+
+    C -->|"futex"| F["SECCOMP_RET_ALLOW"]
+    C -->|"ioctl"| F
+    C -->|"其他"| G{"检查允许列表"}
+
+    G -->|"在允许列表中"| F
+    G -->|"不在允许列表中"| H{"检查 UID/GID 过滤器"}
+
+    H -->|"setresuid 在范围内"| F
+    H -->|"超出范围"| E
+
+    D -->|"在 32 位允许列表中"| F2["SECCOMP_RET_ALLOW"]
+    D -->|"不允许"| E2["SECCOMP_RET_TRAP"]
+
+    style E fill:#ffcdd2
+    style E2 fill:#ffcdd2
+    style F fill:#c8e6c9
+    style F2 fill:#c8e6c9
 ```
 
-过滤器通过 `prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &prog)` 安装。`SECCOMP_RET_TRAP` 会向进程发送 SIGSYS，Android 的 debuggerd 会捕获并生成崩溃报告，清晰标识被禁止的 syscall。
+生成了三个单独的过滤器配置文件：
+
+1. **应用过滤器** —— 用于常规应用程序进程
+2. **应用 Zygote 过滤器** —— 用于应用 Zygote 进程 (由隔离服务使用)
+3. **系统过滤器** —— 用于系统服务器和特权守护进程
+
+过滤器从 C 结构编译为 BPF 字节码，并使用 `prctl(PR_SET_SECCOMP)` 安装：
+
+摘自 `bionic/libc/seccomp/seccomp_policy.cpp` (第 193-199 行)：
+
+```cpp
+static bool install_filter(filter const& f) {
+    struct sock_fprog prog = {
+        static_cast<unsigned short>(f.size()),
+        const_cast<struct sock_filter*>(&f[0]),
+    };
+    if (prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &prog) < 0) {
+```
+
+`SECCOMP_RET_TRAP` 操作向进程发送 SIGSYS 信号，Android 的 debuggerd 会捕获该信号进行崩溃报告。这会产生一份清晰的崩溃报告，标识被禁止的系统调用，有助于调试。
 
 ### 7.2.8 VDSO：避免系统调用开销
 
-对最敏感的系统调用，内核提供 VDSO（Virtual Dynamic Shared Object）：一段由内核映射到每个进程地址空间的小型共享库。Bionic 动态链接器会显式定位并链接 VDSO。
+对于性能最敏感的系统调用，内核提供了一个虚拟动态共享对象 (VDSO) —— 一个由内核映射到每个进程地址空间的小型共享库。Bionic 的动态链接器会显式定位并链接 VDSO。
 
-`bionic/linker/linker_main.cpp` 中的 `add_vdso()` 会通过 auxiliary vector 中的 `AT_SYSINFO_EHDR` 找到 VDSO ELF header，为它创建 `soinfo`，执行 prelink/link 阶段，并设置 `DF_1_NODELETE` 防止卸载。
+摘自 `bionic/linker/linker_main.cpp` (第 184-205 行)：
 
-VDSO 加速的 Bionic 调用包括：
+```cpp
+static void add_vdso() {
+  ElfW(Ehdr)* ehdr_vdso = reinterpret_cast<ElfW(Ehdr)*>(
+      getauxval(AT_SYSINFO_EHDR));
+  if (ehdr_vdso == nullptr) {
+    return;
+  }
 
-- `clock_gettime()`：最频繁调用的时间函数
-- `clock_getres()`：查询时钟分辨率
-- `gettimeofday()`：遗留时间查询
+  vdso = soinfo_alloc(&g_default_namespace, "[vdso]", nullptr, 0, 0);
 
----
+  vdso->phdr = reinterpret_cast<ElfW(Phdr)*>(
+      reinterpret_cast<char*>(ehdr_vdso) + ehdr_vdso->e_phoff);
+  vdso->phnum = ehdr_vdso->e_phnum;
+  vdso->base = reinterpret_cast<ElfW(Addr)>(ehdr_vdso);
+  vdso->size = phdr_table_get_load_size(vdso->phdr, vdso->phnum);
+  vdso->load_bias = get_elf_exec_load_bias(ehdr_vdso);
 
-## 7.3 动态链接器
+  if (!vdso->prelink_image() ||
+      !vdso->link_image(SymbolLookupList(vdso), vdso, nullptr, nullptr)) {
+    __linker_cannot_link(g_argv[0]);
+  }
 
-### 7.3.1 概览
+  // 防止意外卸载...
+  vdso->set_dt_flags_1(vdso->get_dt_flags_1() | DF_1_NODELETE);
+  vdso->set_linked();
+}
+```
 
-动态链接器在 64 位设备上是 `/system/bin/linker64`，在 32 位设备上是 `/system/bin/linker`。它负责加载 Android 上每个动态链接可执行文件和共享库。它是内核映射新进程后最早执行的用户态代码，其正确性决定了系统中每个 native 二进制文件能否运行。
+VDSO 通过 `AT_SYSINFO_EHDR` 辅助向量条目定位，内核在 exec 时将其放在进程堆栈上。链接器将 VDSO 视为任何其他共享库——创建 `soinfo` 结构，运行 prelink 和 link 阶段——但 VDSO 的代码完全在用户空间运行，读取内核管理的共享数据结构来回答诸如“现在几点？”之类的查询，而无需进行模式切换。
 
-linker 源码位于 `bionic/linker/`，约 50 个源文件、7000 多行 C++。关键文件如下：
+Bionic 中的 VDSO 加速调用：
+
+- `clock_gettime()` —— 最频繁调用的时间函数
+- `clock_getres()` —— 时钟分辨率查询
+- `gettimeofday()` —— 遗留的时间查询
+## 7.3 动态链接器 (The Dynamic Linker)
+
+### 7.3.1 概述
+
+动态链接器（在 64 位设备上为 `/system/bin/linker64`，32 位上为 `/system/bin/linker`）负责加载 Android 上的每一个动态链接可执行文件和共享库。它是内核映射新进程后执行的第一段用户空间代码，其正确运行是系统中每个原生二进制文件的基础。
+
+链接器的源码位于 `bionic/linker/`，包含约 50 个源文件，总计超过 7,000 行 C++ 代码。关键文件如下：
 
 | 文件 | 行数 | 用途 |
 |------|-------|---------|
 | `linker.cpp` | 3,791 | 核心链接逻辑：库搜索、加载、命名空间管理 |
-| `linker_phdr.cpp` | 1,737 | ELF 解析、segment 加载、地址空间管理 |
-| `linker_main.cpp` | 859 | 入口、初始化、主链接流程 |
+| `linker_phdr.cpp` | 1,737 | ELF 解析、段加载、地址空间管理 |
+| `linker_main.cpp` | 859 | 入口点、初始化、主链接流程 |
 | `linker_relocate.cpp` | 686 | 重定位处理 |
 | `linker_namespaces.h` | 183 | 命名空间数据结构 |
 | `linker_soinfo.h` | ~400 | `soinfo` 结构定义 |
 | `linker_config.cpp` | ~500 | 配置文件解析器 |
-| `dlfcn.cpp` | ~100 | `dlopen` / `dlsym` API 表面 |
+| `dlfcn.cpp` | ~100 | `dlopen`/`dlsym` API 接口层 |
 
-### 7.3.2 Linker 入口点
+### 7.3.2 链接器入口点 (The Linker Entry Point)
 
-当内核执行动态链接 ELF 二进制文件时，会：
+当内核执行一个动态链接的 ELF 二进制文件时，它会：
 
-1. 映射可执行文件的 PT_LOAD segment。
-2. 读取 PT_INTERP segment 找到 linker 路径，例如 `/system/bin/linker64`。
-3. 把 linker 映射进进程。
-4. 设置 auxiliary vector（AT_PHDR、AT_ENTRY、AT_BASE 等）。
-5. 把控制权交给 linker 入口点。
+1. 映射可执行文件的 `PT_LOAD` 段。
+2. 读取 `PT_INTERP` 段以获取链接器路径（例如 `/system/bin/linker64`）。
+3. 将链接器映射到进程空间。
+4. 设置辅助向量（Auxiliary Vector，如 `AT_PHDR`, `AT_ENTRY`, `AT_BASE` 等）。
+5. 将控制权转交给链接器的入口点。
 
-linker 的入口点是架构专属汇编中的 `_start`，它会调用 `__linker_init`。这里存在一个自举问题：linker 自己也是需要重定位的动态链接二进制。解决方式是两阶段初始化：先使用 position-independent code 完成自重定位，再加载和链接可执行文件及其所有依赖。
+链接器的入口点是 `_start`（由架构特定的汇编实现），它会调用 `__linker_init`。该函数面临一个引导（bootstrapping）问题：链接器本身也是一个动态链接的二进制文件，在它能够重定位其他任何东西之前，必须先完成自身的重定位。
 
-### 7.3.3 主链接流程
+解决方案是分为两个阶段初始化：
 
-`bionic/linker/linker_main.cpp` 中的 `linker_main()` 编排整个链接过程：
+1. **自重定位 (Self-relocation)** —— 使用仅包含地址无关代码（PIC，无外部符号引用）的逻辑处理链接器自身的重定位。
+2. **主链接 (Main link)** —— 加载并链接可执行文件及其所有依赖库。
+
+### 7.3.3 主链接序列 (The Main Linking Sequence)
+
+位于 `bionic/linker/linker_main.cpp` 的 `linker_main` 函数负责编排整个链接过程。
+
+摘自 `bionic/linker/linker_main.cpp` (第 297-525 行)：
 
 ```cpp
 static ElfW(Addr) linker_main(KernelArgumentBlock& args,
                                const char* exe_to_load) {
   ProtectedDataGuard guard;
+
+  // 清理环境
   __libc_init_AT_SECURE(args.envp);
+
+  // 初始化系统属性
   __system_properties_init();
+
+  // 初始化平台属性
   platform_properties_init();
+
+  // 注册 debuggerd 信号处理程序
   linker_debuggerd_init();
-  ...
+```
+
+该函数按以下阶段执行：
+
+```mermaid
+graph TD
+    A["__linker_init<br/>(自重定位)"] --> B["linker_main()"]
+    B --> C["环境清理<br/>(AT_SECURE 检查)"]
+    C --> D["初始化系统属性"]
+    D --> E["初始化平台属性<br/>(ARM64 BTI 支持)"]
+    E --> F["注册 debuggerd 处理程序"]
+    F --> G["解析 LD_DEBUG,<br/>LD_LIBRARY_PATH, LD_PRELOAD"]
+    G --> H["加载/定位可执行文件"]
+    H --> I["为可执行文件创建 soinfo"]
+    I --> J["初始化链接器配置 + 命名空间"]
+    J --> K["预链接可执行文件<br/>(解析 .dynamic 段)"]
+    K --> L["加载 DT_NEEDED + LD_PRELOAD<br/>(BFS 依赖遍历)"]
+    L --> M["重定位所有库"]
+    M --> N["初始化 VDSO"]
+    N --> O["完成静态 TLS 设置"]
+    O --> P["初始化 CFI shadow"]
+    P --> Q["调用 .preinit_array"]
+    Q --> R["为所有库调用 .init_array"]
+    R --> S["返回可执行文件入口点"]
+
+    style A fill:#fff3e0
+    style H fill:#e8f5e9
+    style L fill:#e1f5fe
+    style M fill:#f3e5f5
+    style R fill:#fce4ec
+    style S fill:#c8e6c9
+```
+
+**第 1 阶段：环境与安全**
+
+```cpp
+  // 这些通常由 __libc_init_AT_SECURE 完成清理，
+  // 但再次检查的成本极低。
+  const char* ldpath_env = nullptr;
+  const char* ldpreload_env = nullptr;
+  if (!getauxval(AT_SECURE)) {
+    ldpath_env = getenv("LD_LIBRARY_PATH");
+    ldpreload_env = getenv("LD_PRELOAD");
+  }
+```
+
+当 `AT_SECURE` 被设置（可执行文件具有 setuid/setgid 权限）时，`LD_LIBRARY_PATH` 和 `LD_PRELOAD` 会被忽略。这防止了权限提升攻击，即用户通过设置这些变量向特权进程注入恶意库。
+
+**第 2 阶段：可执行文件初始化**
+
+摘自 `bionic/linker/linker_main.cpp` (第 340-358 行)：
+
+```cpp
+  const ExecutableInfo exe_info = exe_to_load ?
+      load_executable(exe_to_load) :
+      get_executable_info(args.argv[0]);
+
+  soinfo* si = soinfo_alloc(&g_default_namespace,
+                            exe_info.path.c_str(), &exe_info.file_stat,
+                            0, RTLD_GLOBAL);
+  somain = si;
+  si->phdr = exe_info.phdr;
+  si->phnum = exe_info.phdr_count;
+  si->set_should_pad_segments(exe_info.should_pad_segments);
+  get_elf_base_from_phdr(si->phdr, si->phnum, &si->base, &si->load_bias);
+  si->size = phdr_table_get_load_size(si->phdr, si->phnum);
+  si->dynamic = nullptr;
+  si->set_main_executable();
+  init_link_map_head(*si);
+  set_bss_vma_name(si);
+```
+
+`get_executable_info` 函数从辅助向量（`AT_PHDR`, `AT_PHNUM`, `AT_ENTRY`）读取可执行文件的程序头。内核已经映射了可执行文件，链接器只需找到这些头部。
+
+`soinfo` 结构是链接器针对每个库维护的元数据。它是从自定义的块分配器（`LinkerTypeAllocator<soinfo>`）分配的，该分配器按页大小映射内存，从而支持通过 `ProtectedDataGuard` 进行写保护。
+
+**第 3 阶段：命名空间初始化与依赖加载**
+
+```cpp
+  std::vector<android_namespace_t*> namespaces =
+      init_default_namespaces(exe_info.path.c_str());
+
+  if (!si->prelink_image()) __linker_cannot_link(g_argv[0]);
+
+  // 加载 ld_preloads 和依赖项。
+  for (const ElfW(Dyn)* d = si->dynamic; d->d_tag != DT_NULL; ++d) {
+    if (d->d_tag == DT_NEEDED) {
+      const char* name = fix_dt_needed(
+          si->get_string(d->d_un.d_val), si->get_realpath());
+      needed_library_name_list.push_back(name);
+    }
+  }
+
+  if (!find_libraries(&g_default_namespace, si,
+                      needed_library_names, needed_libraries_count,
+                      nullptr, &g_ld_preloads, ld_preloads_count,
+                      RTLD_GLOBAL, nullptr,
+                      true /* add_as_children */, &namespaces)) {
+    __linker_cannot_link(g_argv[0]);
+  }
+```
+
+`prelink_image` 方法解析 `.dynamic` 段以提取符号表、重定位表、`DT_NEEDED` 条目以及初始化/终止函数。随后 `find_libraries` 函数执行广度优先依赖遍历（BFS），加载每个库并将其添加到相应的命名空间中。
+
+**第 4 阶段：调用构造函数与跳转**
+
+```cpp
+  si->call_pre_init_constructors();
+  si->call_constructors();
+
+  ElfW(Addr) entry = exe_info.entry_point;
+  return entry;
+```
+
+在所有库加载并完成重定位后，链接器按依赖顺序（先叶子节点，后根节点）调用初始化函数。最后返回可执行文件的入口点地址，控制权移交给应用程序。
+
+### 7.3.4 soinfo 结构体 (The soinfo Structure)
+
+`soinfo` 结构体是链接器对已加载共享库的内部表示。每个库 —— 包括可执行文件本身、链接器以及 VDSO —— 都有一个对应的 `soinfo`。
+
+摘自 `bionic/linker/linker_soinfo.h` (第 157-248 行)：
+
+```cpp
+struct soinfo {
+  const ElfW(Phdr)* phdr;
+  size_t phnum;
+  ElfW(Addr) base;
+  size_t size;
+
+  ElfW(Dyn)* dynamic;
+  soinfo* next;
+
+ private:
+  uint32_t flags_;
+  const char* strtab_;
+  ElfW(Sym)* symtab_;
+
+  size_t nbucket_;
+  size_t nchain_;
+  uint32_t* bucket_;
+  uint32_t* chain_;
+
+#if defined(USE_RELA)
+  ElfW(Rela)* plt_rela_;
+  size_t plt_rela_count_;
+  ElfW(Rela)* rela_;
+  size_t rela_count_;
+#else
+  ElfW(Rel)* plt_rel_;
+  size_t plt_rel_count_;
+  ElfW(Rel)* rel_;
+  size_t rel_count_;
+#endif
+
+  linker_ctor_function_t* preinit_array_;
+  size_t preinit_array_count_;
+  linker_ctor_function_t* init_array_;
+  size_t init_array_count_;
+  linker_dtor_function_t* fini_array_;
+  size_t fini_array_count_;
+
+  linker_ctor_function_t init_func_;
+  linker_dtor_function_t fini_func_;
+
+#if defined(__arm__)
+  uint32_t* ARM_exidx;
+  size_t ARM_exidx_count;
+#endif
+
+  link_map link_map_head;
+  bool constructors_called;
+  ElfW(Addr) load_bias;
+  bool has_DT_SYMBOLIC;
+};
+```
+
+`flags_` 字段中的关键标志位：
+
+| 标志 | 值 | 含义 |
+|------|-------|---------|
+| `FLAG_LINKED` | 0x00000001 | 库已完全完成链接 |
+| `FLAG_EXE` | 0x00000004 | 这是主可执行文件 |
+| `FLAG_LINKER` | 0x00000010 | 这是链接器本身 |
+| `FLAG_GNU_HASH` | 0x00000040 | 使用 GNU 散列表 |
+| `FLAG_MAPPED_BY_CALLER` | 0x00000080 | 内存由外部提供 |
+| `FLAG_IMAGE_LINKED` | 0x00000100 | `link_image` 已运行 |
+| `FLAG_PRELINKED` | 0x00000400 | `prelink_image` 已运行 |
+| `FLAG_GLOBALS_TAGGED` | 0x00000800 | MTE 全局符号已标记 |
+
+`soinfo` 结构通过 `next` 指针组成单向链表，由 `solist_add_soinfo` 和 `solist_remove_soinfo` 维护。链表顺序为：
+
+1. 主可执行文件 (`somain`)
+2. 链接器本身 (`solinker`)
+3. VDSO (如果存在)
+4. 其他按加载顺序排列的库
+
+### 7.3.5 ELF 加载：ElfReader 类
+
+`bionic/linker/linker_phdr.cpp` 中的 `ElfReader` 类处理读取 ELF 文件并将其映射到内存的物理机制。
+
+**读取 ELF 文件：**
+
+摘自 `bionic/linker/linker_phdr.cpp` (第 171-208 行)：
+
+```cpp
+bool ElfReader::Read(const char* name, int fd, off64_t file_offset,
+                     off64_t file_size) {
+  if (did_read_) {
+    return true;
+  }
+  name_ = name;
+  fd_ = fd;
+  file_offset_ = file_offset;
+  file_size_ = file_size;
+
+  if (ReadElfHeader() &&
+      VerifyElfHeader() &&
+      ReadProgramHeaders() &&
+      CheckProgramHeaderAlignment() &&
+      ReadSectionHeaders() &&
+      ReadDynamicSection() &&
+      ReadPadSegmentNote()) {
+    did_read_ = true;
+  }
+  // ...
+  return did_read_;
 }
 ```
 
-主流程如下：
+Read 阶段执行校验并读取元数据：
 
 ```mermaid
 graph TD
-    A["__linker_init<br/>自重定位"] --> B["linker_main()"]
-    B --> C["清理环境变量<br/>AT_SECURE"]
-    C --> D["初始化系统属性"]
-    D --> E["初始化 linker namespace"]
-    E --> F["加载可执行文件 soinfo"]
-    F --> G["find_libraries()<br/>加载 DT_NEEDED 依赖"]
-    G --> H["link_image()<br/>处理重定位"]
-    H --> I["调用 constructors"]
-    I --> J["跳转到 executable entry"]
+    A["ReadElfHeader()"] --> B["VerifyElfHeader()"]
+    B --> C["ReadProgramHeaders()"]
+    C --> D["CheckProgramHeaderAlignment()"]
+    D --> E["ReadSectionHeaders()"]
+    E --> F["ReadDynamicSection()"]
+    F --> G["ReadPadSegmentNote()"]
+    G --> H["16KiB 兼容性检查"]
+
+    B -->|"坏的幻数"| X["DL_ERR: ELF 幻数错误"]
+    B -->|"类别错误"| Y["DL_ERR: 32位 vs 64位"]
+    B -->|"机器类型错误"| Z["DL_ERR: 架构不匹配"]
+
+    style X fill:#ffcdd2
+    style Y fill:#ffcdd2
+    style Z fill:#ffcdd2
 ```
 
-### 7.3.4 `soinfo` 结构
+**ELF 头部校验：**
 
-`soinfo` 是 linker 中表示已加载 ELF 对象的核心结构。每个可执行文件、共享库、VDSO 都有一个 `soinfo`。它保存 ELF header、program header、dynamic section、符号表、字符串表、重定位表、依赖关系、命名空间、引用计数和初始化状态。
+摘自 `bionic/linker/linker_phdr.cpp` (第 271-340 行)：
 
-可以把 `soinfo` 理解为 linker 维护的“已加载库对象模型”。所有 `dlopen()`、`dlsym()`、重定位、构造函数调用和命名空间检查，最终都会围绕 `soinfo` 展开。
+```cpp
+bool ElfReader::VerifyElfHeader() {
+  if (memcmp(header_.e_ident, ELFMAG, SELFMAG) != 0) {
+    DL_ERR("\"%s\" has bad ELF magic", name_.c_str());
+    return false;
+  }
 
-### 7.3.5 ELF 加载：`ElfReader` 类
+  int elf_class = header_.e_ident[EI_CLASS];
+#if defined(__LP64__)
+  if (elf_class != ELFCLASS64) {
+    if (elf_class == ELFCLASS32) {
+      DL_ERR("\"%s\" is 32-bit instead of 64-bit", name_.c_str());
+    }
+    return false;
+  }
+#endif
 
-ELF 加载由 `bionic/linker/linker_phdr.cpp` 中的 `ElfReader` 负责。它会读取 ELF header、program headers，检查 ELF magic、架构、ABI、文件类型、page alignment，并预留地址空间。
+  if (header_.e_type != ET_DYN) {
+    DL_ERR("\"%s\" has unexpected e_type: %d", name_.c_str(), header_.e_type);
+    return false;
+  }
 
-加载过程包括：
-
-1. 读取 ELF header 并校验格式。
-2. 读取 program header table。
-3. 计算 PT_LOAD segment 总大小。
-4. 预留地址空间。
-5. 映射每个 PT_LOAD segment。
-6. 处理 BSS 和 zero-fill。
-7. 设置 segment protection。
-
-### 7.3.6 Load Bias 与虚拟地址计算
-
-ELF 文件中的虚拟地址是相对其链接地址的。实际加载时，ASLR 会把库放到随机基址。linker 使用 `load_bias` 把 ELF 虚拟地址转换为进程内真实地址：
-
-```text
-runtime_address = elf_virtual_address + load_bias
+  if (header_.e_machine != GetTargetElfMachine()) {
+    DL_ERR("\"%s\" is for %s instead of %s",
+           name_.c_str(),
+           EM_to_string(header_.e_machine),
+           EM_to_string(GetTargetElfMachine()));
+    return false;
+  }
+  return true;
+}
 ```
 
-重定位、符号地址计算、dynamic section 指针修正都依赖这个公式。
+链接器要求 `e_type == ET_DYN`。这意味着 Android 仅加载**地址无关可执行文件 (PIE)**。非 PIE 支持在 API 21 中因安全原因（ASLR 的有效性）被移除。
+
+**将段加载到内存：**
+
+摘自 `bionic/linker/linker_phdr.cpp` (第 211-238 行)：
+
+```cpp
+bool ElfReader::Load(address_space_params* address_space) {
+  CHECK(did_read_);
+  if (did_load_) {
+    return true;
+  }
+  bool reserveSuccess = ReserveAddressSpace(address_space);
+  if (reserveSuccess && LoadSegments() && FindPhdr() &&
+      FindGnuPropertySection()) {
+    did_load_ = true;
+#if defined(__aarch64__)
+    if (note_gnu_property_.IsBTICompatible()) {
+      did_load_ =
+          (phdr_table_protect_segments(phdr_table_, phdr_num_, load_bias_,
+               should_pad_segments_, should_use_16kib_app_compat_,
+               &note_gnu_property_) == 0);
+    }
+#endif
+  }
+  return did_load_;
+}
+```
+
+Load 阶段步骤：
+
+1. **ReserveAddressSpace** —— 通过 `mmap(PROT_NONE)` 为所有 `PT_LOAD` 段分配一块连续的虚拟地址范围。
+2. **LoadSegments** —— 将文件中的每个 `PT_LOAD` 段映射到预留范围内，并设置相应的权限。
+3. **FindPhdr** —— 在映射后的镜像中定位程序头表。
+4. **FindGnuPropertySection** —— 在 AArch64 上读取 `.note.gnu.property` 以检查 BTI（分支目标识别）兼容性。
+5. **BTI 保护** —— 如果库支持 BTI，则对可执行段应用 `PROT_BTI`。
+
+**支持 ASLR 增强的地址空间预留：**
+
+摘自 `bionic/linker/linker_phdr.cpp` (第 589-662 行)：
+
+```cpp
+// 预留一个虚拟地址范围，使其在扩展到下一个 2**align 边界时不会与现有映射重叠。
+static void* ReserveWithAlignmentPadding(size_t size, size_t mapping_align,
+                                          size_t start_align,
+                                          void** out_gap_start,
+                                          size_t* out_gap_size) {
+  // ...
+#if defined(__LP64__)
+  size_t first_byte = reinterpret_cast<size_t>(
+      __builtin_align_up(mmap_ptr, mapping_align));
+  size_t last_byte = reinterpret_cast<size_t>(
+      __builtin_align_down(mmap_ptr + mmap_size, mapping_align) - 1);
+  if (first_byte / kGapAlignment != last_byte / kGapAlignment) {
+    // 该库跨越了 2MB 边界，将使新的巨页产生碎片。
+    // 在其之前插入随机的不可访问巨页以改进 ASLR。
+    gap_size = kGapAlignment * (is_first_stage_init() ? 1 :
+        arc4random_uniform(kMaxGapUnits - 1) + 1);
+  }
+#endif
+```
+
+这段代码实现了一项 ASLR 增强功能：当库的映射跨越 2MB（PMD 大小）边界时，链接器会在库之前插入随机数量的不可访问 2MB 页。这增加了攻击者通过探测可读内存映射来定位库代码的难度。间隙大小是随机的（1 到 32 个 2MB 单元，即 2-64MB），且每次库加载时都会变化。
+
+### 7.3.6 加载偏移 (Load Bias) 与虚拟地址计算
+
+ELF 加载中的核心概念是**加载偏移 (load bias)**：
+
+摘自 `bionic/linker/linker_phdr.cpp` 的文档注释：
+
+> 加载偏移必须添加到从 ELF 文件中读取的任何 `p_vaddr` 值上，以确定对应的内存地址。
+>
+> `load_bias = phdr0_load_address - page_start(phdr0->p_vaddr)`
+
+加载偏移是第一个段实际被映射到的位置与其“期望”位置（其 `p_vaddr`）之间的差值。由于所有段都保持相对位置，将加载偏移添加到任何 `p_vaddr` 即可得到实际内存地址：
+
+`实际地址 = p_vaddr + 加载偏移`
 
 ### 7.3.7 16KiB 页大小兼容性
 
-现代 Android 支持 16KiB page size。linker 必须处理为 4KiB 对齐构建的旧 ELF 与 16KiB 系统之间的兼容性问题。`ElfReader` 会检查 program alignment，如果对齐小于系统 page size 且未启用 compat 模式，就拒绝加载并报告错误。
+Android 正在从 4KiB 页大小过渡到 16KiB。链接器包含了在 16KiB 页设备上加载 4KiB 对齐库的兼容性逻辑：
 
-16KiB compat 模式会使用特殊映射路径，把数据读入已有匿名映射，而不是直接 `mmap()` 文件 segment。这为页面大小迁移提供兼容空间。
+摘自 `bionic/linker/linker_phdr.cpp` (第 190-206 行)：
 
-### 7.3.8 重定位处理
+```cpp
+if (kPageSize == 16 * 1024 && min_align_ < kPageSize) {
+    auto compat_prop_val =
+        ::android::base::GetProperty(
+            "bionic.linker.16kb.app_compat.enabled", "false");
 
-重定位由 `bionic/linker/linker_relocate.cpp` 实现。linker 会遍历 `.rela.dyn`、`.rela.plt` 等重定位表，为每个 entry 计算目标地址、解析符号，并写入最终地址。
+    should_use_16kib_app_compat_ =
+        ParseBool(compat_prop_val) == ParseBoolResult::kTrue ||
+        get_16kb_appcompat_mode();
+}
+```
 
-核心流程如下：
+在兼容模式下，链接器将 ELF 段读取到可写的预留空间中，而不是直接使用 `mmap()`，因为 `mmap()` 要求映射必须按系统页大小（16KiB）对齐，而库的段可能仅按 4KiB 对齐。
+
+### 7.3.8 重定位处理 (Relocation Processing)
+
+在所有段映射完成后，链接器必须处理**重定位 (relocations)** —— 即对代码和数据进行修补，以编码那些直到加载时才能确定地址的符号引用。
+
+重定位引擎位于 `bionic/linker/linker_relocate.cpp`。
+
+摘自 `bionic/linker/linker_relocate.cpp` (第 63-95 行)：
+
+```cpp
+class Relocator {
+ public:
+  Relocator(const VersionTracker& version_tracker,
+            const SymbolLookupList& lookup_list)
+      : version_tracker(version_tracker), lookup_list(lookup_list)
+  {}
+
+  soinfo* si = nullptr;
+  const char* si_strtab = nullptr;
+  size_t si_strtab_size = 0;
+  ElfW(Sym)* si_symtab = nullptr;
+
+  const VersionTracker& version_tracker;
+  const SymbolLookupList& lookup_list;
+
+  // 为重复符号查找缓存 键/值
+  ElfW(Word) cache_sym_val = 0;
+  const ElfW(Sym)* cache_sym = nullptr;
+  soinfo* cache_si = nullptr;
+  // ...
+};
+```
+
+`Relocator` 类维护处理库重定位的状态。**符号缓存**是一项关键优化：一个库中的许多重定位会引用同一个符号，缓存避免了重复的散列表查找。
+
+**重定位模式：**
+
+链接器对 `RelocMode` 使用模板特化，生成三种版本的重定位循环：
+- `JumpTable`: `JUMP_SLOT` 重定位的快速路径（用于 PLT）。
+- `Typical`: 处理绝对地址、全局数据（`GLOB_DAT`）或相对偏移的快速路径。
+- `General`: 处理 TLS、文本重定位（仅 32 位）和 IFUNC 等罕见情况。
+
+**处理单个重定位：**
+
+摘自 `bionic/linker/linker_relocate.cpp` (第 163-176 行)：
+
+```cpp
+template <RelocMode Mode>
+static bool process_relocation_impl(Relocator& relocator,
+                                     const rel_t& reloc) {
+  void* const rel_target = reinterpret_cast<void*>(
+      relocator.si->apply_memtag_if_mte_globals(
+          reloc.r_offset + relocator.si->load_bias));
+  const uint32_t r_type = ELFW(R_TYPE)(reloc.r_info);
+  const uint32_t r_sym = ELFW(R_SYM)(reloc.r_info);
+
+  soinfo* found_in = nullptr;
+  const ElfW(Sym)* sym = nullptr;
+  const char* sym_name = nullptr;
+  ElfW(Addr) sym_addr = 0;
+
+  if (r_sym != 0) {
+    sym_name = relocator.get_string(
+        relocator.si_symtab[r_sym].st_name);
+  }
+```
+
+链接器对每个重定位条目执行以下操作：
+1. 计算目标地址（偏移 + 加载偏移）。
+2. 提取重定位类型和符号索引。
+3. 在字符串表中查找符号名称。
+4. **符号解析 (Symbol resolution)**：将符号解析为具体地址。
+5. 应用重定位（将解析后的地址写入目标位置）。
+
+### 7.3.9 符号解析 (Symbol Resolution)
+
+符号解析是根据名称查找符号定义的过程。链接器支持两种散列表格式：
+1. **ELF hash** (经典 `DT_HASH`)。
+2. **GNU hash** (`DT_GNU_HASH`)：一种更高效的格式，使用 **Bloom 过滤器**进行快速过滤。
+
+摘自 `bionic/linker/linker_soinfo.h` (第 80-98 行)：
+
+```cpp
+struct SymbolLookupLib {
+  uint32_t gnu_maskwords_ = 0;
+  uint32_t gnu_shift2_ = 0;
+  ElfW(Addr)* gnu_bloom_filter_ = nullptr;
+
+  const char* strtab_;
+  size_t strtab_size_;
+  const ElfW(Sym)* symtab_;
+  const ElfW(Versym)* versym_;
+
+  const uint32_t* gnu_chain_;
+  size_t gnu_nbucket_;
+  uint32_t* gnu_bucket_;
+
+  soinfo* si_ = nullptr;
+
+  bool needs_sysv_lookup() const {
+    return si_ != nullptr && gnu_bloom_filter_ == nullptr;
+  }
+};
+```
+
+`SymbolLookupLib` 结构体预先提取了从库中查找符号所需的所有字段，避免了重定位循环中重复的指针追踪。
+
+**符号查找顺序：**
+- 如果库设置了 `DT_SYMBOLIC`，首先查找自身的符号表。
+- 否则遵循标准 ELF 规则：首先是全局作用域（所有以 `RTLD_GLOBAL` 加载的库），然后是局部作用域（该库及其依赖项）。
+
+### 7.3.10 库搜索与加载 (Library Search and Loading)
+
+当链接器需要加载库时，它会按定义好的顺序搜索多个位置。
 
 ```mermaid
 graph TD
-    A["Relocation Entry"] --> B["计算 target = r_offset + load_bias"]
-    B --> C["提取 relocation type"]
-    C --> D["是否有 symbol? "]
-    D -->|"Yes"| E["符号查找"]
-    D -->|"No"| F["相对重定位"]
-    E --> G["计算 symbol address"]
-    F --> H["写入 relocated value"]
-    G --> H
+    A["库名称<br/>(例如 libfoo.so)"] --> B{包含 '/'?}
+    B -->|是| C["直接按路径打开"]
+    B -->|否| D["搜索 LD_LIBRARY_PATH"]
+    D -->|找到| Z["返回 fd"]
+    D -->|未找到| E["搜索 DT_RUNPATH<br/>(来自请求者)"]
+    E -->|找到且可访问| Z
+    E -->|未找到| F["搜索命名空间<br/>默认路径"]
+    F -->|找到| Z
+    F -->|未找到| G["搜索链接的<br/>命名空间"]
+    G -->|找到且共享| Z
+    G -->|未找到| H["DL_ERR: 找不到库"]
+
+    style Z fill:#c8e6c9
+    style H fill:#ffcdd2
 ```
 
-linker 使用模板特化生成三类 relocation loop：
-
-- **JumpTable**：最常见 relocation 类型的跳表快速路径
-- **Typical**：典型重定位组合的优化路径
-- **General**：处理 TLS、text relocation、IFUNC 等复杂情况
-
-符号查找会使用缓存。典型 Android 应用启动时可能处理数万次重定位，符号缓存命中率通常超过 80%，显著降低启动时间。
-
-### 7.3.9 符号解析
-
-符号解析是根据符号名寻找定义地址的过程。linker 支持两种 hash table：
-
-1. **ELF hash（`DT_HASH`）**：传统 ELF hash table。
-2. **GNU hash（`DT_GNU_HASH`）**：更高效，使用 Bloom filter 快速排除不可能命中的库。
-
-GNU hash 的 Bloom filter 很重要，因为大多数符号只定义在一两个库中。查找某个符号时，绝大多数库会被 Bloom filter 快速判定为“不可能包含该符号”，无需遍历 hash chain。
-
-符号查找顺序遵循 ELF 规则：对于带 `DT_SYMBOLIC` 的库，先查自身符号表；否则先查 global scope（`RTLD_GLOBAL` 加载的库），再查 local scope（当前库及其依赖）。
-
-### 7.3.10 库搜索与加载
-
-当 linker 需要加载库（来自 `DT_NEEDED` 或 `dlopen()`）时，会按固定顺序搜索：
-
-```mermaid
-graph TD
-    A["Library name<br/>(例如 libfoo.so)"] --> B{"是否包含 '/'?"}
-    B -->|"Yes"| C["按路径直接打开"]
-    B -->|"No"| D["搜索 LD_LIBRARY_PATH"]
-    D -->|"Found"| Z["返回 fd"]
-    D -->|"Not found"| E["搜索 DT_RUNPATH"]
-    E -->|"Found + accessible"| Z
-    E -->|"Not found"| F["搜索 namespace 默认路径"]
-    F -->|"Found"| Z
-    F -->|"Not found"| G["搜索 linked namespaces"]
-    G -->|"Found + shared"| Z
-    G -->|"Not found"| H["DL_ERR: library not found"]
-```
-
-Android linker 的一个独特能力是可以直接从 APK（ZIP 文件）中加载共享库。路径使用 `!/` 作为分隔符，例如：
-
-```text
-/data/app/com.example/base.apk!/lib/arm64-v8a/libfoo.so
-```
-
-APK 内的库必须未压缩并且 page-aligned，这样 linker 可以直接把 APK 文件中的库内容映射进进程地址空间。
+**从 APK 文件 (ZIP) 加载：**
+Android 链接器的一个独特功能是能够直接从 APK 文件（即 ZIP 归档）加载共享库。库必须以非压缩且页对齐（page-aligned）的方式存储在 ZIP 中。路径语法使用 `!/` 作为分隔符。
 
 ### 7.3.11 依赖遍历与加载顺序
 
-`find_libraries()` 使用广度优先遍历依赖树。BFS 顺序确保依赖库先于需要它们的库被加载。该遍历器也用于 `dlsym(RTLD_DEFAULT)` 全局符号查找、基于 handle 的 `dlsym()` 查找，以及构造函数调用排序。
+`find_libraries` 函数执行依赖树的**广度优先遍历 (BFS)**。BFS 顺序确保了依赖库总是在需要它们的库之前被加载。
 
-遍历 action 支持三种结果：`kWalkStop`、`kWalkContinue`、`kWalkSkip`，因此同一个 walker 既能用于查找，也能用于完整遍历。
+### 7.3.12 dlopen/dlsym/dlclose API
 
-### 7.3.12 `dlopen` / `dlsym` / `dlclose` API
+应用程序通过 `dl*` 系列函数在运行时与链接器交互。这些函数在 `dlfcn.cpp` 中暴露，并通过 `caller_addr` 参数确定调用者的命名空间上下文。
 
-应用运行时通过 `dl*` 系列函数与 linker 交互。这些 API 暴露在 `bionic/linker/dlfcn.cpp`：
+### 7.3.13 数据保护与安全 (Protected Data)
 
-```cpp
-void* __loader_dlopen(const char* filename, int flags, const void* caller_addr) __LINKER_PUBLIC__;
-void* __loader_dlsym(void* handle, const char* symbol, const void* caller_addr) __LINKER_PUBLIC__;
-int __loader_dlclose(void* handle) __LINKER_PUBLIC__;
-```
+链接器通过 `ProtectedDataGuard` 保护其内部数据结构（如 `soinfo` 分配器）。这些分配器使用只读内存映射，只有在需要修改链接器数据时，才通过 RAII 机制临时获取写权限。这是一种深度防御措施，防止攻击者篡改链接器内部结构。
 
-所有函数都带 `caller_addr` 参数。linker 用它判断调用者属于哪个 `soinfo`，进而确定调用者所在 namespace，并在该 namespace 中搜索目标库或符号。
+### 7.3.14 链接器配置 (Linker Configuration)
 
-Android 扩展 API `android_dlopen_ext()` 还支持：
+链接器从 `/linkerconfig/ld.config.txt` 读取配置。该文件定义了命名空间、搜索路径、允许的路径以及命名空间之间的链接关系。
 
-- `ANDROID_DLEXT_FORCE_LOAD`：即使已经加载也强制加载
-- `ANDROID_DLEXT_USE_LIBRARY_FD`：从指定 fd 加载
-- `ANDROID_DLEXT_RESERVED_ADDRESS`：加载到指定地址
-- `ANDROID_DLEXT_USE_NAMESPACE`：在指定 linker namespace 中加载
+### 7.3.15 完整的 ELF 加载流水线
 
-### 7.3.13 Protected Data 与安全
-
-linker 中部分全局数据在初始化完成后会被保护为只读。`ProtectedDataGuard` 用于在需要修改 linker 内部状态时临时切换内存保护，修改完成后恢复只读。这降低了内存破坏漏洞直接篡改 linker 关键状态的风险。
-
-### 7.3.14 Linker 配置
-
-linker 的 namespace 和路径配置由 linkerconfig 生成。相关工具位于：
-
-```text
-system/linkerconfig/
-```
-
-生成结果会描述每个 namespace 的搜索路径、允许访问路径、是否隔离，以及 namespace 之间的 link 关系。
-
-### 7.3.15 完整 ELF 加载流水线
+以下是从 `dlopen("libfoo.so")` 到执行的完整流水线：
 
 ```mermaid
 graph TD
-    A["Kernel execve"] --> B["映射 executable"]
-    B --> C["加载 linker"]
-    C --> D["linker 自重定位"]
-    D --> E["解析 linker config"]
-    E --> F["创建 namespace"]
-    F --> G["加载 executable soinfo"]
-    G --> H["加载 DT_NEEDED 依赖"]
-    H --> I["映射 PT_LOAD segments"]
-    I --> J["处理 relocations"]
-    J --> K["调用 constructors"]
-    K --> L["进入 executable entry"]
+    A["dlopen('libfoo.so', RTLD_NOW)"] --> B["确定调用者命名空间"]
+    B --> C["搜索库路径"]
+    C --> D["打开文件描述符"]
+    D --> E["检查是否已加载<br/>(通过 inode 或真实路径)"]
+    E -->|已加载| F["增加引用计数，返回句柄"]
+    E -->|未加载| G["ElfReader::Read()"]
+
+    G --> G1["ReadElfHeader()"]
+    G1 --> G2["VerifyElfHeader()"]
+    G2 --> G3["ReadProgramHeaders()"]
+    G3 --> G4["ReadSectionHeaders()"]
+    G4 --> G5["ReadDynamicSection()"]
+    G5 --> G6["ReadPadSegmentNote()"]
+
+    G6 --> H["ElfReader::Load()"]
+    H --> H1["ReserveAddressSpace()"]
+    H1 --> H2["LoadSegments()"]
+    H2 --> H3["FindPhdr()"]
+    H3 --> H4["FindGnuPropertySection()"]
+
+    H4 --> I["创建 soinfo"]
+    I --> J["prelink_image()<br/>(解析 .dynamic)"]
+    J --> K["加载 DT_NEEDED<br/>(递归 BFS)"]
+    K --> L["link_image()<br/>(处理重定位)"]
+    L --> M["call_constructors()<br/>(.init_array)"]
+    M --> N["返回句柄"]
+
+    style A fill:#e1f5fe
+    style N fill:#c8e6c9
 ```
-
----
-
 ## 7.4 VNDK 与 Linker Namespaces
 
 ### 7.4.1 Treble 命名空间问题
 
-Project Treble 要求 system 分区和 vendor 分区可以独立更新。库加载层面的问题是：vendor 进程不能随意链接 system 私有库，否则 system 更新可能破坏 vendor 二进制。linker namespace 就是用来在运行时强制执行这一边界的机制。
+Android 的 Treble 架构（从 Android 8.0 引入）将 **platform**（框架层）与 **vendor**（供应商实现）分离。其目标是允许平台独立于供应商代码进行更新。但原生库带来了一个挑战：如果供应商库和平台库都链接到 `libutils.so`，它们可能需要该库的不同版本。
 
-### 7.4.2 `android_namespace_t` 结构
+解决方案是 **linker namespaces**（链接器命名空间）——这是链接器的一种机制，用于隔离不同的库集，使其无法看到彼此的符号。
 
-`android_namespace_t` 表示一个 linker namespace。它包含命名空间名、类型标志、默认库搜索路径、允许访问路径、已加载库列表，以及指向其他 namespace 的 link。
+### 7.4.2 android_namespace_t 结构
 
-核心概念如下：
+摘自 `bionic/linker/linker_namespaces.h`（第 72-183 行）：
 
-- **isolated**：隔离 namespace 只能加载允许路径中的库。
-- **visible**：可被其他 namespace 查找或链接。
-- **default_library_paths**：默认搜索目录。
-- **permitted_paths**：隔离 namespace 中允许访问的路径。
-- **linked namespaces**：可从其他 namespace 共享指定 soname。
+```cpp
+struct android_namespace_t {
+  const char* get_name() const { return name_.c_str(); }
+  bool is_isolated() const { return is_isolated_; }
+  bool is_also_used_as_anonymous() const {
+    return is_also_used_as_anonymous_;
+  }
 
-### 7.4.3 Namespace 架构
+  const std::vector<std::string>& get_ld_library_paths() const;
+  const std::vector<std::string>& get_default_library_paths() const;
+  const std::vector<std::string>& get_permitted_paths() const;
+  const std::vector<std::string>& get_allowed_libs() const;
 
-Treble 设备通常包含多个 namespace：
+  const std::vector<android_namespace_link_t>& linked_namespaces() const;
+  void add_linked_namespace(android_namespace_t* linked_namespace,
+                            std::unordered_set<std::string> shared_lib_sonames,
+                            bool allow_all_shared_libs);
 
-```mermaid
-graph TB
-    SYSTEM["system namespace<br/>/system/lib64"]
-    VENDOR["vendor namespace<br/>/vendor/lib64"]
-    VNDK["vndk namespace<br/>/apex/com.android.vndk.v*/lib64"]
-    DEFAULT["default namespace"]
-    APEX["APEX namespaces"]
+  void add_soinfo(soinfo* si);
+  void remove_soinfo(soinfo* si);
+  const soinfo_list_t& soinfo_list() const;
 
-    VENDOR -->|"LL-NDK libs"| SYSTEM
-    VENDOR -->|"VNDK-SP / VNDK"| VNDK
-    DEFAULT --> SYSTEM
-    APEX --> SYSTEM
+  bool is_accessible(const std::string& path);
+  bool is_accessible(soinfo* si);
+
+ private:
+  std::string name_;
+  bool is_isolated_;
+  bool is_exempt_list_enabled_;
+  bool is_also_used_as_anonymous_;
+  std::vector<std::string> ld_library_paths_;
+  std::vector<std::string> default_library_paths_;
+  std::vector<std::string> permitted_paths_;
+  std::vector<std::string> allowed_libs_;
+  std::vector<android_namespace_link_t> linked_namespaces_;
+  soinfo_list_t soinfo_list_;
+};
 ```
 
-系统库、vendor 库、VNDK 库和 APEX 库被分配到不同 namespace。跨 namespace 访问必须通过显式 link，并且只能访问配置中声明为 shared 的库名。
+核心概念：
 
-### 7.4.4 VNDK 库分类
+- **Isolated namespace（隔离命名空间）**：当 `is_isolated_` 为 true 时，该命名空间只能从其 `default_library_paths_` 和 `permitted_paths_` 中加载库。这可以防止供应商代码意外加载平台库。
 
-VNDK（Vendor Native Development Kit）定义了 vendor 代码可依赖的一组稳定 native 库。大致分为：
+- **Namespace links（命名空间链接）**：通过链接，一个命名空间中的库可以对另一个命名空间可见。每个链接指定了哪些库是共享的：
 
-| 类别 | 说明 |
-|------|------|
-| LL-NDK | 最底层稳定库，如 `libc.so`、`libm.so`、`libdl.so`、`liblog.so` |
-| VNDK-SP | 可被 same-process HAL 使用的稳定库 |
-| VNDK | Vendor 可使用的 framework native 库稳定子集 |
-| FWK-only | framework 私有库，vendor 不可直接访问 |
+```cpp
+struct android_namespace_link_t {
+  android_namespace_t* linked_namespace_;
+  std::unordered_set<std::string> shared_lib_sonames_;
+  bool allow_all_shared_libs_;
 
-### 7.4.5 `linkerconfig` 工具
+  bool is_accessible(const char* soname) const {
+    return allow_all_shared_libs_ ||
+           shared_lib_sonames_.find(soname) != shared_lib_sonames_.end();
+  }
+};
+```
 
-`linkerconfig` 根据设备配置、VNDK 版本、APEX 信息和分区布局生成 linker namespace 配置。入口位于 `system/linkerconfig/main.cc`。
+- **Allowed libs（允许的库）**：对可以加载到命名空间中的库进行的额外过滤，不受路径限制。
 
-它生成的配置会被 linker 在进程启动时读取，用于创建 namespace、设置搜索路径、声明 permitted path 和 namespace link。
+### 7.4.3 命名空间架构
 
-### 7.4.6 Bionic 库链接
-
-`libc.so`、`libm.so`、`libdl.so` 等 Bionic 基础库属于 LL-NDK，几乎所有 namespace 都需要访问它们。linkerconfig 会建立从 vendor / vndk namespace 到 system namespace 的受限 link，只共享这些基础稳定库。
-
-### 7.4.7 System Namespace 配置
-
-system namespace 通常包含 `/system/lib64`、`/system_ext/lib64`、APEX runtime 库路径等。它服务 framework 进程和 system daemon，可访问平台私有库。
-
-### 7.4.8 Vendor Namespace 配置
-
-vendor namespace 的默认搜索路径指向 `/vendor/lib64`、`/odm/lib64` 等 vendor 分区路径。它通常是 isolated namespace，因此不能直接访问 `/system/lib64` 中的任意库，只能通过显式 link 访问 LL-NDK 或 VNDK 库。
-
-### 7.4.9 VNDK Namespace 配置
-
-VNDK namespace 通常指向 `/apex/com.android.vndk.vXX/lib64/`。它承载一组供 vendor 使用的稳定 framework native 库版本。vendor namespace 会通过 link 访问 VNDK namespace 中允许共享的 soname。
-
-### 7.4.10 Exempt List：向后兼容
-
-为了兼容旧应用或旧 vendor 实现，linker 支持 exempt list。它允许某些库在严格 namespace 规则之外被加载，但通常只对旧 SDK 目标或特定兼容场景启用，并伴随警告。长期趋势是减少这类例外。
-
-### 7.4.11 Namespace 如何影响 `dlopen`
-
-`dlopen()` 的搜索范围由调用者所在 namespace 决定。linker 通过 `caller_addr` 找到调用者 `soinfo`，再确定 namespace。若目标库不在该 namespace 的默认路径、permitted path 或 linked namespace 的 shared soname 集合中，加载会失败。
-
-### 7.4.12 运行时 Namespace 创建
-
-Android 提供 `android_create_namespace()` 等扩展 API，用于在运行时创建 namespace。这常用于 classloader namespace、native bridge、isolated app 或加载特定 APK 内 native 库的场景。
-
-### 7.4.13 默认库路径
-
-linker 内置多组默认路径：普通路径、ASan 路径、HWASan 路径。ASan/HWASan 模式会优先搜索 sanitizer instrumented 库，例如 `/data/asan/` 或 `hwasan/` 子目录，然后回退到普通路径。这允许同一设备上同时存在生产库和 sanitizer 库。
-
-### 7.4.14 Namespace 隔离实践
-
-一个 vendor 进程（例如 `/vendor/bin/camera_server`）通常位于 `vendor/default` namespace。它可以加载自己的 vendor 库，例如 `/vendor/lib64/hw/libcamera_hal.so`，也可以通过 vndk namespace 使用 `libcutils.so`、`libutils.so` 等 VNDK 库，并通过 system namespace link 使用 LL-NDK 库如 `libc.so`、`libm.so`、`liblog.so`。
-
-但它不能直接访问 framework 私有库，例如 `/system/lib64/libandroid_runtime.so`。这正是 namespace 隔离要强制执行的边界。
-
-### 7.4.15 VNDK 的演进与弱化
-
-VNDK 系统正在演进。较新的 AOSP 版本在 linkerconfig 中包含 `--deprecate_vndk` 标志。趋势是更多使用 APEX 模块进行库版本管理，而不是依赖 VNDK。APEX 可以携带自己的库版本，并拥有独立 mount namespace 和 linker namespace，隔离性更强，也更适合独立更新。
-
-不过，VNDK 对现有 vendor 实现的向后兼容仍然重要，并会和 APEX 方案在多个 Android 世代中共存。
-
-### 7.4.16 库加载决策树
-
-当 linker 遇到 `DT_NEEDED` 或 `dlopen()` 时，完整决策过程如下：
+标准的 Android 命名空间拓扑如下所示：
 
 ```mermaid
 graph TD
-    A["Need library: libfoo.so"] --> B{"名称是否包含 '/'?"}
-    B -->|"Yes"| C["直接按路径打开"]
-    B -->|"No"| D["搜索 LD_LIBRARY_PATH"]
-    D --> E{"找到?"}
-    E -->|"Yes"| F["检查 namespace 可访问性"]
-    E -->|"No"| G["搜索 DT_RUNPATH"]
-    G --> H{"找到?"}
-    H -->|"Yes"| F
-    H -->|"No"| I["搜索 namespace 默认路径"]
-    I --> J{"找到?"}
-    J -->|"Yes"| K["加载库"]
-    J -->|"No"| L["搜索 linked namespaces"]
-    L --> M{"linked ns 中找到?"}
-    M -->|"Yes"| N{"在 shared_lib_sonames 中?"}
-    N -->|"Yes"| O["使用 linked namespace 中的库"]
-    N -->|"No"| P["库不可访问"]
-    M -->|"No"| Q["库未找到"]
-    F --> R{"namespace isolated?"}
-    R -->|"No"| K
-    R -->|"Yes"| S{"路径在 permitted_paths?"}
-    S -->|"Yes"| K
-    S -->|"No"| P
+    subgraph "System Section (系统分区)"
+        SYS["default<br/>(system namespace)"]
+        VNDK["vndk<br/>(VNDK 库)"]
+        VNDK_PROD["vndk_product<br/>(Product VNDK)"]
+        SPHAL["sphal<br/>(Same-Process HAL)"]
+        RS["rs<br/>(RenderScript)"]
+    end
+
+    subgraph "Vendor Section (供应商分区)"
+        VDEF["default<br/>(vendor namespace)"]
+        VVNDK["vndk<br/>(vendor VNDK)"]
+    end
+
+    subgraph "APEX Namespaces"
+        APEX["com.android.art<br/>(ART Runtime)"]
+        APEX2["com.android.vndk.vXX<br/>(VNDK APEX)"]
+    end
+
+    SYS -->|"libc.so, libm.so, libdl.so"| VNDK
+    SYS -->|"libc.so, libm.so, libdl.so"| VNDK_PROD
+    SYS -->|"libc.so, libm.so, libdl.so"| SPHAL
+    SYS -->|"libc.so, libm.so, libdl.so"| RS
+
+    VDEF -->|"LLNDK libraries"| SYS
+    VDEF -->|"VNDK-SP, VNDK-core"| VVNDK
+    VVNDK -->|"all shared libs"| VDEF
+
+    SPHAL -->|"LLNDK"| SYS
+
+    style SYS fill:#e1f5fe
+    style VDEF fill:#fff3e0
+    style VNDK fill:#f3e5f5
+    style APEX fill:#e8f5e9
 ```
 
-### 7.4.17 Segment 加载细节
+### 7.4.4 VNDK 库类别
 
-`ElfReader::LoadSegments()` 遍历每个 PT_LOAD program header，并把对应文件区域映射进预留地址空间。每个 segment 经过四个子操作：
+VNDK (Vendor NDK) 定义了四类库：
 
-1. **MapSegment / CompatMapSegment**：使用 `mmap64()` 和 `MAP_FIXED` 把文件内容映射到地址空间。16KiB 兼容模式下使用 compat 路径。
-2. **ZeroFillSegment**：若 writable segment 的文件大小未覆盖完整页，页尾剩余部分必须清零。
-3. **DropPaddingPages**：在 page size 迁移场景下释放 segment 间 padding page，降低内存压力。
-4. **MapBssSection**：若 `p_memsz > p_filesz`，多出的部分是 BSS，linker 会在 segment 末尾映射匿名页。
+摘自 `build/soong/cc/vndk.go`（第 23-29 行）：
 
-linker 会拒绝同时 writable 和 executable 的 segment（W+E），这是 W^X 安全策略的一部分。从 API level 26 开始，这类库会被拒绝加载。
-
-### 7.4.18 `find_libraries` 算法
-
-`find_libraries()` 是依赖解析核心。它处理循环依赖、跨 namespace 加载、ASLR load shuffling、重复库检测和 soname 规则。算法大致分为：
-
-1. 检查目标 soname 是否已在当前 namespace 或 linked namespace 中加载。
-2. 尝试从当前 namespace 加载。
-3. 对旧应用启用 exempt list fallback。
-4. 搜索 linked namespaces。
-5. 为新加载库创建 `LoadTask` 并解析其 `DT_NEEDED`。
-6. 广度优先加载依赖并执行重定位。
-
-### 7.4.19 重复检测与 Soname 契约
-
-linker 使用 soname 判断库是否已经加载。若两个路径不同但 soname 相同，linker 通常会复用已加载实例，而不是重复加载。这对 ELF 依赖一致性非常重要，也避免同一个库的全局状态出现多个副本。
-
-### 7.4.20 `DT_NEEDED` 与 `DT_RUNPATH` 处理
-
-`DT_NEEDED` 声明库依赖，`DT_RUNPATH` 声明相对当前库的运行时搜索路径。Android linker 会在搜索默认 namespace 路径之前检查请求库的 `DT_RUNPATH`，并确保找到的路径对当前 namespace 可访问。
-
-### 7.4.21 GDB 集成
-
-linker 维护调试器可见的 loaded library 列表，并在库加载/卸载时通知 debugger。这使 GDB、LLDB 和 debuggerd 能够看到进程中的共享库、符号和加载地址。
-
-### 7.4.22 CFI（Control Flow Integrity）Shadow
-
-linker 支持 CFI shadow，用于把代码地址映射到对应的 CFI check 信息。启用 CFI 的库加载后，linker 会注册其 shadow 信息，使运行时可以快速验证间接调用目标是否合法。
-
-### 7.4.23 Linker 中的 TLS
-
-动态链接器还负责处理 ELF TLS 模型，包括 TLS segment、TLS module ID、线程创建时的 TLS 初始化，以及 `__tls_get_addr()` 所需元数据。TLS 处理必须与 Bionic pthread 实现保持一致。
-
-### 7.4.24 MTE Globals 支持
-
-在支持 Memory Tagging Extension 的 AArch64 设备上，linker 可以为全局变量应用内存标记。重定位处理时会使用 `apply_memtag_if_mte_globals()` 修正目标地址，保证全局数据访问符合 MTE 标记规则。
-
-### 7.4.25 调试 Linker
-
-linker 支持多类调试输出。`LD_DEBUG` 可启用不同类别日志，例如 library search、relocation、statistics、timing 等。调试库加载问题时，最常见的信息包括搜索路径、namespace 名称、库不可访问原因、未解析符号和 ABI mismatch。
-
-### 7.4.26 `ldd` 工具
-
-Android 提供 `ldd` 风格工具用于查看 ELF 依赖解析。它可以显示库的 `DT_NEEDED` 依赖、解析路径和 namespace 可访问性，有助于定位 native 库加载失败。
-
-### 7.4.27 Linker Namespace 生命周期
-
-namespace 通常在进程启动早期由 linkerconfig 配置创建，也可能在运行时由 classloader 或平台扩展 API 创建。namespace 会随着进程存在而存在，其内加载的 `soinfo` 通过引用计数和 `dlclose()` 生命周期管理。
-
----
-
-## 总结
-
-Bionic 和动态链接器共同构成 Android native 运行时的基础层。Bionic 提供精简、快速、与 Android 深度集成的 C 库；动态链接器负责加载 ELF、解析依赖、执行重定位、调用构造函数，并通过 namespace 执行 Treble 边界。
-
-关键结论如下：
-
-1. **Bionic 是 Android 专用 C 库。** 它以 BSD 许可证、低开销和 Android 集成为核心目标，而不是复刻 glibc。
-2. **系统调用接口由生成系统维护。** `SYSCALLS.TXT` 和 `gensyscalls.py` 保证多架构 syscall wrapper 一致。
-3. **seccomp 是应用沙箱的重要边界。** Zygote 在 fork 前安装过滤器，限制应用可调用的 syscall。
-4. **linker 是启动性能关键路径。** ELF 加载、重定位、符号查找和 constructor 调用都会直接影响进程启动时间。
-5. **namespace 是 Treble 的运行时执行机制。** 它限制 system/vendor 之间的 native 库依赖，防止跨分区私有 ABI 耦合。
-
-### 架构专属系统调用约定
-
-| 架构 | syscall 指令 | syscall number 寄存器 | 参数寄存器 | 返回寄存器 |
-|------|--------------|------------------------|------------|------------|
-| arm | `svc #0` | `r7` | `r0-r6` | `r0` |
-| arm64 | `svc #0` | `x8` | `x0-x5` | `x0` |
-| x86 | `int 0x80` / `sysenter` | `eax` | `ebx,ecx,edx,esi,edi,ebp` | `eax` |
-| x86_64 | `syscall` | `rax` | `rdi,rsi,rdx,r10,r8,r9` | `rax` |
-| riscv64 | `ecall` | `a7` | `a0-a5` | `a0` |
-
-### Linker 配置文件格式
-
-linker 配置描述 namespace、search path、permitted path 和 namespace link。概念格式如下：
-
-```ini
-namespace.default.isolated = true
-namespace.default.search.paths = /system/${LIB}
-namespace.default.permitted.paths = /system/${LIB}
-namespace.default.links = runtime,vndk
-namespace.default.link.runtime.shared_libs = libc.so:libm.so:libdl.so
+```go
+const (
+    llndkLibrariesTxt       = "llndk.libraries.txt"
+    vndkCoreLibrariesTxt    = "vndkcore.libraries.txt"
+    vndkSpLibrariesTxt      = "vndksp.libraries.txt"
+    vndkPrivateLibrariesTxt = "vndkprivate.libraries.txt"
+    vndkProductLibrariesTxt = "vndkproduct.libraries.txt"
+)
 ```
 
-### 关键术语表
+| 类别 | 描述 | 示例库 |
+|----------|-------------|-------------------|
+| **LL-NDK** | Low-Level NDK；始终对供应商可用 | `libc.so`, `libm.so`, `libdl.so`, `liblog.so` |
+| **VNDK-core** | 核心 VNDK；对供应商可用但具有版本控制 | `libcutils.so`, `libbase.so`, `libutils.so` |
+| **VNDK-SP** | Same-Process VNDK；加载到框架进程中 | `libhardware.so`, `libhidlbase.so` |
+| **VNDK-private** | 仅对其他 VNDK 模块可用，不对供应商直接开放 | 内部 VNDK 实现库 |
 
-| 术语 | 含义 |
-|------|------|
-| Bionic | Android 的 C 库 |
-| linker | Android 动态链接器 |
-| `soinfo` | linker 中表示已加载 ELF 对象的数据结构 |
-| `DT_NEEDED` | ELF 中声明依赖库的 dynamic entry |
-| `DT_RUNPATH` | ELF 中声明运行时搜索路径的 dynamic entry |
-| relocation | 把符号引用修正为运行时地址的过程 |
-| load bias | ELF 虚拟地址到运行时地址的偏移 |
-| namespace | linker 的库搜索与访问隔离域 |
-| VNDK | Vendor 可使用的稳定 native framework 库集合 |
-| LL-NDK | vendor 可使用的底层稳定 NDK 库 |
+构建系统中的 `VndkProperties` 结构定义了一个库如何声明其 VNDK 成员身份：
 
-### 延伸阅读与交叉引用
+摘自 `build/soong/cc/vndk.go`（第 45-76 行）：
 
-- 第 2 章：Soong 构建系统与 native 模块
-- 第 4 章：启动流程与 init
-- 第 6 章：系统属性
-- 第 10 章：SELinux、seccomp 与安全模型
-- 第 14 章：启动性能与 Perfetto trace
+```go
+type VndkProperties struct {
+    Vndk struct {
+        // 声明为 VNDK 或 VNDK-SP 模块
+        Enabled *bool
 
----
+        // 声明为 VNDK-SP 模块，它是 VNDK 的子集
+        Support_system_process *bool
 
+        // 声明为 VNDK-private 模块
+        Private *bool
+
+        // 扩展另一个模块
+        Extends *string
+    }
+}
+```
+
+### 7.4.5 linkerconfig 工具
+
+`system/linkerconfig/` 工具在启动时生成链接器配置。它由 init 在早期启动序列中调用，并生成 `/linkerconfig/ld.config.txt`。
+
+摘自 `system/linkerconfig/main.cc`（第 33-43 行）：
+
+```cpp
+#include "linkerconfig/apex.h"
+#include "linkerconfig/apexconfig.h"
+#include "linkerconfig/baseconfig.h"
+#include "linkerconfig/configparser.h"
+#include "linkerconfig/context.h"
+#include "linkerconfig/environment.h"
+#include "linkerconfig/namespacebuilder.h"
+#include "linkerconfig/recovery.h"
+#include "linkerconfig/variableloader.h"
+#include "linkerconfig/variables.h"
+```
+
+该工具使用模块化生成器模式。每个命名空间在 `system/linkerconfig/contents/namespace/` 中都有一个专用的生成器（builder）：
+
+| 生成器文件 | 命名空间 | 用途 |
+|-------------|-----------|---------|
+| `systemdefault.cc` | `default` (system) | 框架层代码 |
+| `vendordefault.cc` | `default` (vendor) | 供应商二进制文件 |
+| `vndk.cc` | `vndk` / `vndk_product` | VNDK 库 |
+| `sphal.cc` | `sphal` | 同进程 HAL (Same-process HALs) |
+| `rs.cc` | `rs` | RenderScript |
+| `apexdefault.cc` | APEX-specific | 每个 APEX 专有的命名空间 |
+| `productdefault.cc` | `default` (product) | 产品分区 (Product partition) |
+| `recoverydefault.cc` | `default` (recovery) | 恢复模式 |
+| `isolateddefault.cc` | `default` (isolated) | 隔离进程 |
+
+### 7.4.6 Bionic 库链接
+
+每个命名空间都需要访问核心 Bionic 库。这是通过 `AddStandardSystemLinks` 函数配置的：
+
+摘自 `system/linkerconfig/contents/common/system_links.cc`（第 29-62 行）：
+
+```cpp
+const std::vector<std::string> kBionicLibs = {
+    "libc.so",
+    "libdl.so",
+    "libdl_android.so",
+    "libm.so",
+};
+
+void AddStandardSystemLinks(const Context& ctx, Section* section) {
+  const std::string system_ns_name = ctx.GetSystemNamespaceName();
+  section->ForEachNamespaces([&](Namespace& ns) {
+    if (ns.GetName() != system_ns_name) {
+      ns.GetLink(system_ns_name).AddSharedLib(kBionicLibs);
+    }
+  });
+}
+```
+
+这确保了每个命名空间都可以通过指向系统命名空间的链接来解析 Bionic 的核心库。如果没有这一点，基本的 C 库函数将无法使用。
+
+### 7.4.7 系统命名空间配置
+
+用于框架代码的系统（默认）命名空间在 `system/linkerconfig/contents/namespace/systemdefault.cc` 中配置。
+
+摘自 `system/linkerconfig/contents/namespace/systemdefault.cc`（第 31-78 行）：
+
+```cpp
+void SetupSystemPermittedPaths(Namespace* ns) {
+  const std::vector<std::string> permitted_paths = {
+      "/system/${LIB}/drm",
+      "/system/${LIB}/extractors",
+      "/system/${LIB}/hw",
+      system_ext + "/${LIB}",
+
+      // odex 文件所在地（libart 需要 dlopen 它们）
+      "/system/framework",
+      "/system/app",
+      "/system/priv-app",
+      system_ext + "/framework",
+      system_ext + "/app",
+      system_ext + "/priv-app",
+      "/vendor/framework",
+      "/vendor/app",
+      "/vendor/priv-app",
+      "/odm/framework",
+      "/odm/app",
+      "/odm/priv-app",
+      product + "/framework",
+      product + "/app",
+      product + "/priv-app",
+      "/data",
+      "/mnt/expand",
+      "/apex/com.android.runtime/${LIB}/bionic",
+      "/system/${LIB}/bootstrap",
+  };
+```
+
+注意关于 VNDK 隔离的显式注释：
+
+```cpp
+  // 我们不能将整个 /system/${LIB} 作为允许路径，
+  // 因为这样做可以通过绝对路径加载 /system/${LIB}/vndk* 目录中的库。
+  // VNDK 库是使用以前版本的 Android 构建的，因此不得加载到此命名空间中。
+```
+
+这就是安全边界的作用：即使系统命名空间具有广泛的权限，它也会刻意排除 VNDK 目录以防止版本混杂。
+
+### 7.4.8 供应商命名空间配置
+
+供应商进程在具有严格隔离的专有命名空间中运行：
+
+摘自 `system/linkerconfig/contents/namespace/vendordefault.cc`（第 35-68 行）：
+
+```cpp
+Namespace BuildVendorNamespace(const Context& ctx,
+                                const std::string& name) {
+  Namespace ns(name, /*is_isolated=*/true, /*is_visible=*/true);
+
+  ns.AddSearchPath("/odm/${LIB}");
+  ns.AddSearchPath("/vendor/${LIB}");
+  ns.AddSearchPath("/vendor/${LIB}/hw");
+  ns.AddSearchPath("/vendor/${LIB}/egl");
+
+  ns.AddPermittedPath("/odm");
+  ns.AddPermittedPath("/vendor");
+  ns.AddPermittedPath("/system/vendor");
+
+  // 链接到其他命名空间
+  ns.GetLink("rs").AddSharedLib("libRS_internal.so");
+  ns.AddRequires(base::Split(
+      Var("LLNDK_LIBRARIES_VENDOR", ""), ":"));
+
+  if (IsVendorVndkVersionDefined()) {
+    ns.GetLink(ctx.GetSystemNamespaceName())
+        .AddSharedLib(Var("SANITIZER_DEFAULT_VENDOR"));
+    ns.GetLink("vndk").AddSharedLib({
+        Var("VNDK_SAMEPROCESS_LIBRARIES_VENDOR"),
+        Var("VNDK_CORE_LIBRARIES_VENDOR")});
+  }
+  return ns;
+}
+```
+
+供应商命名空间：
+
+- 是 **隔离的** (`is_isolated=true`) —— 只能从列出的路径加载
+- 可以搜索 `/odm/${LIB}` 和 `/vendor/${LIB}`（以及 hw/egl 子目录）
+- 拥有指向以下位置的链接：
+  - **system** 命名空间：用于 LL-NDK 库（libc, libm, libdl, liblog）
+  - **VNDK** 命名空间：用于受版本控制的 VNDK 库
+  - **RenderScript** 命名空间：用于 `libRS_internal.so`
+
+### 7.4.9 VNDK 命名空间配置
+
+VNDK 命名空间是受版本控制的 VNDK 库所在地：
+
+摘自 `system/linkerconfig/contents/namespace/vndk.cc`（第 30-123 行）：
+
+```cpp
+Namespace BuildVndkNamespace(const Context& ctx,
+                              VndkUserPartition vndk_user) {
+  const char* name;
+  if (is_system_or_unrestricted_section &&
+      vndk_user == VndkUserPartition::Product) {
+    name = "vndk_product";
+  } else {
+    name = "vndk";
+  }
+
+  Namespace ns(name, /*is_isolated=*/true,
+               /*is_visible=*/is_system_or_unrestricted_section);
+
+  // 搜索顺序：
+  // 1. VNDK 扩展 (vendor/lib/vndk-sp, vendor/lib/vndk)
+  // 2. VNDK APEX (/apex/com.android.vndk.vXX/${LIB})
+  // 3. vendor/lib 或 product/lib 中的扩展依赖
+
+  for (const auto& lib_path : lib_paths) {
+    ns.AddSearchPath(lib_path + "/vndk-sp");
+    if (!is_system_or_unrestricted_section) {
+      ns.AddSearchPath(lib_path + "/vndk");
+    }
+  }
+  ns.AddSearchPath("/apex/com.android.vndk.v" + vndk_version + "/${LIB}");
+```
+
+VNDK 命名空间的搜索顺序揭示了其扩展机制：
+
+1. **VNDK 扩展** (`/vendor/${LIB}/vndk-sp`) —— 供应商提供的对 VNDK 库的替换或扩展
+2. **VNDK APEX** (`/apex/com.android.vndk.vXX/${LIB}`) —— 标准的 VNDK 库，以 APEX 模块形式发布
+3. **回退路径 (Fallback)** —— 供应商专有的库目录，用于存放 VNDK 扩展所依赖的库
+
+`vndk_product` 变体是用于产品分区应用的一个并行命名空间，这些应用可能使用与供应商代码不同的 VNDK 版本。
+
+### 7.4.10 豁免名单（Exempt List）：向后兼容性
+
+链接器包含一个用于向后兼容的豁免名单：
+
+摘自 `bionic/linker/linker.cpp`（第 226-268 行）：
+
+```cpp
+static bool is_exempt_lib(android_namespace_t* ns, const char* name,
+                           const soinfo* needed_by) {
+  static const char* const kLibraryExemptList[] = {
+    "libandroid_runtime.so",
+    "libbinder.so",
+    "libcrypto.so",
+    "libcutils.so",
+    "libexpat.so",
+    "libgui.so",
+    "libmedia.so",
+    "libnativehelper.so",
+    "libssl.so",
+    "libstagefright.so",
+    "libsqlite.so",
+    "libui.so",
+    "libutils.so",
+    nullptr
+  };
+
+  // 如果目标版本是 N 或更高，不享受豁免名单。
+  if (get_application_target_sdk_version() >= 24) {
+    return false;
+  }
+  // ...
+}
+```
+
+针对 API 级别 23 (Marshmallow) 或更低版本的应用被允许直接访问这些平台库，即使它们不是 NDK 的一部分。这是必要的，因为许多 Treble 之前的应用依赖于这些私有库。针对 API 级别 24 (Nougat) 或更高版本的应用则受到严格的命名空间隔离约束。
+
+### 7.4.11 命名空间如何与 dlopen 交互
+
+当应用程序调用 `dlopen("libfoo.so", RTLD_NOW)` 时，会执行以下感知命名空间的逻辑：
+
+1. 链接器根据返回地址确定调用者的命名空间。
+2. 搜索调用者的命名空间路径。
+3. 如果未找到，检查链接的命名空间，但仅限于链接的 `shared_lib_sonames` 集合中的库。
+4. 如果库位于隔离的命名空间中，链接器会验证其是否位于可访问路径上。
+
+可访问性检查逻辑如下：
+
+摘自 `bionic/linker/linker.cpp`（第 1221-1249 行）：
+
+```cpp
+  if ((fs_stat.f_type != TMPFS_MAGIC) && (!ns->is_accessible(realpath))) {
+    const soinfo* needed_by = task->is_dt_needed() ?
+        task->get_needed_by() : nullptr;
+    if (is_exempt_lib(ns, name, needed_by)) {
+      // 对旧版应用允许访问并发出警告
+    } else {
+      DL_OPEN_ERR("library \"%s\" needed or dlopened by \"%s\" is not "
+                   "accessible for the namespace \"%s\"",
+                   name, needed_or_dlopened_by, ns->get_name());
+    }
+  }
+```
+
+注意 `TMPFS_MAGIC` 异常：从 tmpfs（通过 `memfd_create()` 创建）加载的库会绕过可访问性检查。这使得应用能够在运行时创建库（例如 JIT 编译），而无需在库搜索路径上拥有一个可写的目录。
+
+### 7.4.12 运行时命名空间创建
+
+应用程序和框架可以通过 `android_create_namespace` API 在运行时创建新的命名空间：
+
+摘自 `bionic/linker/dlfcn.cpp`（第 51-57 行）：
+
+```cpp
+android_namespace_t* __loader_android_create_namespace(
+    const char* name,
+    const char* ld_library_path,
+    const char* default_library_path,
+    uint64_t type,
+    const char* permitted_when_isolated_path,
+    android_namespace_t* parent_namespace,
+    const void* caller_addr) __LINKER_PUBLIC__;
+```
+
+这被 `libnativeloader` 所使用，它为每个应用创建具有适当隔离度的命名空间。每个应用获得自己的命名空间，该空间可以看到：
+
+- 应用自身的可执行原生库（来自 APK）
+- LL-NDK 库（通过指向系统命名空间的链接）
+- VNDK 库（如果应用使用了 NDK）
+- 应用清单文件中 `uses-native-library` 条目列出的库
+
+### 7.4.13 默认库路径
+
+链接器根据设备配置定义默认库搜索路径：
+
+摘自 `bionic/linker/linker.cpp`（第 105-154 行）：
+
+```cpp
+#if defined(__LP64__)
+static const char* const kSystemLibDir     = "/system/lib64";
+static const char* const kOdmLibDir        = "/odm/lib64";
+static const char* const kVendorLibDir     = "/vendor/lib64";
+static const char* const kAsanSystemLibDir = "/data/asan/system/lib64";
+static const char* const kAsanOdmLibDir    = "/data/asan/odm/lib64";
+static const char* const kAsanVendorLibDir = "/data/asan/vendor/lib64";
+#else
+static const char* const kSystemLibDir     = "/system/lib";
+// ...
+#endif
+
+static const char* const kDefaultLdPaths[] = {
+  kSystemLibDir,
+  kOdmLibDir,
+  kVendorLibDir,
+  nullptr
+};
+
+static const char* const kAsanDefaultLdPaths[] = {
+  kAsanSystemLibDir,
+  kSystemLibDir,
+  kAsanOdmLibDir,
+  kOdmLibDir,
+  kAsanVendorLibDir,
+  kVendorLibDir,
+  nullptr
+};
+
+#if defined(__aarch64__)
+static const char* const kHwasanSystemLibDir = "/system/lib64/hwasan";
+static const char* const kHwasanOdmLibDir    = "/odm/lib64/hwasan";
+static const char* const kHwasanVendorLibDir = "/vendor/lib64/hwasan";
+#endif
+```
+
+路径分为三组：
+
+1. **Default（默认）** —— 正常操作：`/system/lib64`, `/odm/lib64`, `/vendor/lib64`
+2. **ASan** —— 地址检测 (AddressSanitizer) 模式：优先搜索 `/data/asan/` 中的检测库，失败后回退到正常路径。
+3. **HWASan** —— 硬件地址检测 (Hardware AddressSanitizer) 模式（仅限 AArch64）：优先搜索 `hwasan/` 子目录中的检测库。
+
+这允许检测版本与生产版本共存于同一设备上，当检测器启用时，检测版本具有优先权。
+
+### 7.4.14 命名空间隔离实践
+
+以下是在符合 Treble 标准的设备上，供应商进程的命名空间隔离工作原理示例：
+
+```mermaid
+graph TD
+    subgraph "Vendor Process (供应商进程 /vendor/bin/camera_server)"
+        VP["camera_server<br/>Namespace: vendor/default"]
+    end
+
+    subgraph "vendor/default 命名空间"
+        VL1["libcamera_hal.so<br/>/vendor/lib64/hw/"]
+        VL2["libqcom_camera.so<br/>/vendor/lib64/"]
+    end
+
+    subgraph "vndk 命名空间"
+        VNDK1["libcutils.so<br/>/apex/com.android.vndk.v34/lib64/"]
+        VNDK2["libutils.so<br/>/apex/com.android.vndk.v34/lib64/"]
+    end
+
+    subgraph "system 命名空间"
+        SYS1["libc.so<br/>/system/lib64/"]
+        SYS2["libm.so<br/>/system/lib64/"]
+        SYS3["liblog.so<br/>/system/lib64/"]
+    end
+
+    VP --> VL1
+    VP --> VL2
+    VL1 -->|"DT_NEEDED"| VNDK1
+    VL1 -->|"DT_NEEDED"| VNDK2
+    VNDK1 -->|"LL-NDK 链接"| SYS1
+    VNDK1 -->|"LL-NDK 链接"| SYS2
+    VL2 -->|"LL-NDK 链接"| SYS3
+
+    VP -.->|"被拦截 (BLOCKED)"| SYS_PRIV["libandroid_runtime.so<br/>/system/lib64/"]
+
+    style VP fill:#fff3e0
+    style VL1 fill:#fff3e0
+    style VL2 fill:#fff3e0
+    style VNDK1 fill:#f3e5f5
+    style VNDK2 fill:#f3e5f5
+    style SYS1 fill:#e1f5fe
+    style SYS2 fill:#e1f5fe
+    style SYS3 fill:#e1f5fe
+    style SYS_PRIV fill:#ffcdd2
+```
+
+在此场景中：
+
+- `camera_server` 位于 `vendor/default` 命名空间中。
+- 它可以加载自己的供应商库（`libcamera_hal.so`, `libqcom_camera.so`）。
+- 这些库可以通过 `vndk` 命名空间链接使用 VNDK 库（`libcutils.so`, `libutils.so`）。
+- 所有库都可以通过指向系统命名空间的链接使用 LL-NDK 库（`libc.so`, `libm.so`, `liblog.so`）。
+- 直接访问平台私有库（`libandroid_runtime.so`）被命名空间隔离机制 **拦截**。
+
+### 7.4.15 VNDK 的弃用与演进
+
+VNDK 系统正在演进。最新的 AOSP 版本在 `linkerconfig` 中包含了一个 `--deprecate_vndk` 标志：
+
+摘自 `system/linkerconfig/main.cc`（第 62-63 行）：
+
+```cpp
+    {"deprecate_vndk", no_argument, 0, 'd'},
+```
+
+趋势是趋向于使用 APEX 模块进行库版本控制，而不是 VNDK 机制。每个 APEX 可以携带其专有版本的库，并在各自的挂载命名空间（mount namespace）和链接器命名空间中隔离。这提供了比 VNDK 强得多的隔离（VNDK 共享单个进程地址空间），并更好地支持独立更新。
+
+然而，VNDK 对于与现有供应商实现的向后兼容性仍然至关重要，很可能会在未来几个 Android 版本中与基于 APEX 的解决方案共存。
+
+### 7.4.16 库加载决策树：find_libraries 算法
+
+当链接器遇到 `DT_NEEDED` 条目或 `dlopen` 调用时，完整的决策过程如下：
+
+```mermaid
+graph TD
+    A["需要库：libfoo.so"] --> B{名称包含 '/'？}
+    B -->|是| C["按路径直接打开"]
+    B -->|否| D["搜索 LD_LIBRARY_PATH"]
+    D --> E{找到？}
+    E -->|是| F["检查命名空间可访问性"]
+    E -->|否| G["搜索 DT_RUNPATH"]
+    G --> H{找到？}
+    H -->|是| F
+    H -->|否| I["搜索命名空间默认路径"]
+    I --> J{找到？}
+    J -->|是| K["无需可访问性检查<br/>(默认路径始终可访问)"]
+    J -->|否| L["搜索链接的命名空间"]
+    L --> M{在链接的 ns 中找到？}
+    M -->|是| N{在 shared_lib_sonames 中？}
+    N -->|是| O["使用链接命名空间中的库"]
+    N -->|否| P["库不可访问"]
+    M -->|否| Q["未找到库"]
+
+    F --> R{命名空间是否隔离？}
+    R -->|否| S["加载库"]
+    R -->|是| T{路径是否在 permitted_paths 中？}
+    T -->|是| S
+    T -->|否| U{是否在旧版豁免名单中？}
+    U -->|是, SDK < 24| V["加载并发出警告"]
+    U -->|否| P
+
+    C --> F
+    K --> S
+
+    style S fill:#c8e6c9
+    style O fill:#c8e6c9
+    style V fill:#fff9c4
+    style P fill:#ffcdd2
+    style Q fill:#ffcdd2
+```
+
+这是 `find_library_internal` 函数实现的多阶段算法。该函数负责处理循环依赖、跨命名空间加载以及为了 ASLR（地址空间布局随机化）进行的加载乱序（load shuffling）。
+
+摘自 `bionic/linker/linker.cpp`（第 1459-1528 行）：
+
+```cpp
+static bool find_library_internal(android_namespace_t* ns,
+                                   LoadTask* task,
+                                   ZipArchiveCache* zip_archive_cache,
+                                   LoadTaskList* load_tasks,
+                                   int rtld_flags) {
+  soinfo* candidate;
+
+  // 阶段 1：检查是否已加载（通过 soname）
+  if (find_loaded_library_by_soname(ns, task->get_name(),
+          true /* 搜索链接的命名空间 */, &candidate)) {
+    task->set_soinfo(candidate);
+    return true;
+  }
+
+  // 阶段 2：尝试从此命名空间加载
+  if (load_library(ns, task, zip_archive_cache, load_tasks,
+                   rtld_flags, true)) {
+    return true;
+  }
+
+  // 阶段 3：旧版应用的豁免名单回退
+  if (ns->is_exempt_list_enabled() &&
+      is_exempt_lib(ns, task->get_name(), task->get_needed_by())) {
+    ns = &g_default_namespace;
+    if (load_library(ns, task, zip_archive_cache, load_tasks,
+                     rtld_flags, true)) {
+      return true;
+    }
+  }
+
+  // 阶段 4：搜索链接的命名空间
+  for (auto& linked_namespace : ns->linked_namespaces()) {
+    if (find_library_in_linked_namespace(linked_namespace, task)) {
+      if (task->get_soinfo() != nullptr) {
+        return true;  // 已加载
+      }
+      // 可以在链接的命名空间中加载
+      if (load_library(linked_namespace.linked_namespace(), task,
+                       zip_archive_cache, load_tasks, rtld_flags,
+                       false)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+```
 ## 7.5 Musl：主机侧的 Bionic 替代方案
+
+虽然 Bionic 是 Android 针对设备端目标的 C 库，但 AOSP 还集成了 **musl libc**，作为 **主机端工具编译（host tool compilation）** 的替代 C 库。本节将解释 musl 在 AOSP 中存在的原因、其集成方式，以及何时使用它来替代 glibc。
 
 ### 7.5.1 为什么 AOSP 中有 Musl？
 
-AOSP 中的 Musl 用于主机侧构建场景，尤其是需要可移植、轻量、静态链接友好的 host 工具时。它不是 Android 设备运行时的 libc，设备端仍然使用 Bionic。Musl 的价值在于为构建工具提供一个更可控的 Linux libc 目标，减少对宿主发行版 glibc 版本的依赖。
+Android 的构建系统在 Linux 主机上运行。默认情况下，主机工具（如 `aapt2`、`dex2oat` 或 `zipalign`）是针对 **glibc**（大多数 Linux 发行版上的标准 C 库）编译的。然而，glibc 在构建工具的分发方面存在一些缺陷：
+
+- **动态链接依赖**：glibc 二进制文件依赖于主机精确的 glibc 版本，这在较旧的系统上会导致“GLIBC_2.XX not found”错误。
+- **庞大的共享库占用**：glibc 会引入许多共享对象。
+- **复杂的静态链接**：glibc 不鼓励静态链接，并且在静态链接时存在已知问题（如 NSS、locale、dlopen）。
+
+Musl 解决了这些问题：
+
+- **干净的静态链接**：musl 从设计之初就考虑了静态链接。
+- **最小依赖**：生成自包含的二进制文件。
+- **可移植的输出**：静态链接的 musl 二进制文件可以在任何 Linux 内核版本上运行，无需担心 glibc 版本问题。
 
 ### 7.5.2 Musl 源码与版本
 
-Musl 源码作为 external 项目集成在 AOSP 中。它保持相对上游的同步，并通过 Android 构建系统生成 host toolchain 需要的库和头文件。
+Musl 位于 AOSP 树的 `external/musl/` 目录下：
 
-### 7.5.3 为 Host 构建启用 Musl
+```
+external/musl/
+├── Android.bp              # 构建规则
+├── sources.bp              # 生成的源文件列表
+├── README                  # 上游 v1.2.5
+├── METADATA                # 版本和许可证信息
+├── android/                # Android 专用适配层
+│   ├── generate_bp.py      # 从上游生成 sources.bp
+│   ├── relinterp.c         # 动态解释器重定位
+│   ├── ldso_trampoline.cpp # 加载器跳板（Loader trampoline）
+│   └── include/            # Android 专用的头文件覆盖
+│       ├── features.h
+│       ├── math.h
+│       ├── resolv.h
+│       └── string.h
+├── include/                # musl 公共头文件
+├── src/                    # musl 源码（上游）
+│   ├── string/             # 字符串操作
+│   ├── malloc/             # 内存分配
+│   ├── thread/             # 线程原语
+│   ├── stdio/              # 标准 I/O
+│   └── ...
+└── ldso/                   # 动态链接器（musl 的 ld.so）
+```
 
-构建系统可以选择使用 Musl 作为 host libc 目标。这样构建出的 host 工具更容易在不同 Linux 发行版之间运行，因为它们不强依赖宿主系统的 glibc ABI。
+`android/` 目录包含了 Android 专用的适配代码，用于桥接 musl 上游行为与 AOSP 需求之间的差异。
+
+### 7.5.3 为主机构建启用 Musl
+
+通过 `USE_HOST_MUSL` 环境变量激活 Musl：
+
+```bash
+# 启用 musl 进行主机工具编译
+export USE_HOST_MUSL=true
+m aapt2   # 现在针对 musl 而非 glibc 进行编译
+```
+
+构建系统的流程经过多个层级：
+
+```mermaid
+flowchart LR
+    ENV["USE_HOST_MUSL=true"] --> MK["soong_config.mk"]
+    MK --> SOONG["Soong HostMusl<br/>variable.go"]
+    SOONG --> TC["工具链选择<br/>linuxMuslX8664"]
+    TC --> FLAGS["编译器标志<br/>-DANDROID_HOST_MUSL<br/>-nostdlibinc"]
+    TC --> LINK["链接器标志<br/>-nostdlib<br/>--sysroot /dev/null"]
+    TC --> CRT["CRT 对象<br/>libc_musl_crtbegin_*"]
+```
 
 ### 7.5.4 构建系统集成
 
-Soong 对 Musl host target 提供专门支持。host 模块可以根据目标 OS/libc 变体生成 glibc 或 musl 版本。构建规则会选择对应 sysroot、headers、crt 对象和链接参数。
+当启用 musl 时，Soong 会选择专用的工具链工厂，覆盖默认的基于 glibc 的主机编译：
+
+```go
+// 编译器标志：强制隔离主机环境
+var linuxMuslCflags = []string{
+    "-DANDROID_HOST_MUSL",
+    "-nostdlibinc",
+    "--sysroot /dev/null",
+}
+```
+
+`--sysroot /dev/null` 标志至关重要：它防止编译器找到任何系统头文件或库，确保与主机的 glibc 完全隔离。所有头文件均来自 musl 自身的 `include/` 目录。
+
+#### 架构支持
+
+Musl 支持四种主机架构，每种架构都有专用的 LLVM triple：
+
+| 架构 | LLVM Triple | 工具链工厂 |
+|---|---|---|
+| x86 | `i686-linux-musl` | `linuxMuslX86ToolchainFactory` |
+| x86_64 | `x86_64-linux-musl` | `linuxMuslX8664ToolchainFactory` |
+| ARM | `arm-linux-musleabihf` | `linuxMuslArmToolchainFactory` |
+| ARM64 | `aarch64-linux-musl` | `linuxMuslArm64ToolchainFactory` |
+
+#### CRT 对象
+
+Musl 提供自己的 C 运行时启动对象（Defined in `external/musl/Android.bp`）：
+- `libc_musl_crtbegin_dynamic`：动态可执行文件启动
+- `libc_musl_crtbegin_static`：静态可执行文件启动
+- `libc_musl_crtbegin_so`：共享库启动
+- `libc_musl_crtend[_so]`：清理对象
 
 ### 7.5.5 预编译 Musl 工具链
 
-AOSP 可以携带预编译 Musl 工具链，用于保证构建环境一致性。这样 CI 与开发者机器上的 host 工具行为更一致。
+预编译的 Clang 工具链包含所有支持架构的 musl 运行时库，位于 `prebuilts/clang/host/linux-x86/clang-*/musl/`。这确保了构建过程的自洽性。
 
 ### 7.5.6 Bionic-Musl 头文件共享
 
-Bionic 和 Musl 在 host/device 边界上有部分头文件共享或协调需求，尤其是 Linux UAPI、标准 C 头文件、架构定义和构建工具使用的接口。共享需要谨慎处理，避免把设备端 Bionic 语义泄漏到 host Musl 目标，或反过来污染设备端 ABI。
+有趣的是，musl 重用了 Bionic 内核 UAPI 层的一些头文件。构建系统生成一个包含 Bionic 内核头文件的 musl sysroot。这确保了 musl 和 bionic 在内核结构定义（如 `ioctl` 编号、socket 选项等）上达成一致，因为两者最终都针对相同的 Linux 内核。
 
 ### 7.5.7 Musl 与 Sanitizer 限制
 
-Musl host 构建与 sanitizer 组合存在限制。部分 sanitizer runtime 与 glibc 集成更成熟，而 Musl 的 TLS、动态链接和 libc 内部实现差异会影响 sanitizer 支持范围。
+并非所有 Sanitizer 都能与 musl 配合工作。由于 musl 动态链接器在 `LD_PRELOAD` 和 `dlopen` 方面的语义不同，CFI 以及 ARM64 地址/硬件地址 Sanitizer 在 musl 环境下会被禁用。
 
 ### 7.5.8 Bionic vs. Musl vs. Glibc
 
-| 维度 | Bionic | Musl | glibc |
-|------|--------|------|-------|
-| 主要用途 | Android 设备端 | 轻量 host / 静态链接 | 通用 Linux 发行版 |
-| 许可证 | BSD | MIT | LGPL |
-| 体积 | 小 | 很小 | 大 |
-| Android 集成 | 深度集成 | 无设备端集成 | 无 Android 集成 |
-| ABI 目标 | Android ABI | Linux host ABI | Linux host ABI |
-| NSS / locale | 精简 | 精简 | 完整 |
-
-### 7.5.9 何时使用 Musl
-
-Musl 适合构建需要跨 Linux 发行版运行的 host 工具、静态链接工具和 CI 环境中的可复现工具。Android 设备端 native 代码应继续使用 Bionic。
+| 特性 | Bionic | glibc | musl |
+|---|---|---|---|
+| **目标** | Android 设备 | Linux 主机 (默认) | Linux 主机 (选配) |
+| **静态链接** | 支持 | 存在问题 (NSS/locale) | 干净，推荐使用 |
+| **二进制移植性** | 不适用 | 绑定主机 glibc 版本 | 可在任何 Linux 上运行 |
+| **体积** | 极小 | 较大 | 极小 |
+| **POSIX 合规性** | 部分 (有意为之) | 完全 | 几乎完全 |
+| **激活方式** | 设备端默认 | 主机端默认 | `USE_HOST_MUSL=true` |
 
 ---
 
@@ -862,127 +2253,104 @@ Musl 适合构建需要跨 Linux 发行版运行的 host 工具、静态链接�
 
 ### 7.6.1 `soinfo` 方法接口
 
-`soinfo` 不只是数据结构，也提供大量方法封装 linker 对 ELF 对象的操作。例如读取 dynamic section、获取 soname、查询符号表、处理版本信息、判断是否 linked、管理 children/parents、调用 constructors/destructors、设置 namespace 与引用计数等。
+`soinfo` 结构体为链接器提供了丰富的方法接口，用于操作已加载的库。
 
-这些方法让 linker 的核心算法可以把 ELF 对象当作高层对象处理，而不是在各处直接操作裸指针和 dynamic tag。
+从 `bionic/linker/linker_soinfo.h` 可以看到关键方法：
+- `prelink_image()`：解析 `.dynamic` 节，填充 `soinfo` 字段（符号表、重定位表等），但不解析符号。
+- `link_image()`：处理所有重定位，解析符号引用并修正代码/数据。
+- `protect_relro()`：将 RELRO（重定位只读）页面标记为只读，防止 GOT 覆写攻击。
+- `resolve_symbol_address()`：对于标准符号，增加 load bias；对于 **GNU IFUNC** 符号，调用 resolver 函数以确定运行时地址。
+
+`soinfo` 的生命周期严格遵循：分配 -> 读取 -> 加载 -> 预链接 -> 链接 -> RELRO 保护 -> 运行 Init -> 卸载销毁。
 
 ### 7.6.2 GNU Hash：NEON 加速符号查找
 
-在 AArch64 上，linker 可以使用 NEON 优化 GNU hash 查找。GNU hash 本身已经通过 Bloom filter 提供快速拒绝，NEON 优化进一步加快批量比较和 hash chain 扫描。这对启动阶段的大量符号解析很有价值。
+链接器为 ARM 架构集成了 NEON 加速的 GNU hash 实现。
+
+GNU hash 函数（`h = h * 33 + c`）是著名的 DJB hash。在 ARM 上，NEON 实现利用 SIMD 指令并行处理多个字节。这在处理长符号名时能带来显著的性能提升。此外，hash 计算过程会顺带返回字符串长度，从而避免了后续冗余的 `strlen()` 调用。
 
 ### 7.6.3 CFI Shadow 架构
 
-CFI shadow 是一张从代码地址到 CFI metadata 的快速映射表。linker 在加载启用 CFI 的库时注册对应代码范围，让运行时检查可以快速判断间接调用目标是否落在合法函数入口。
+控制流完整性（CFI）Shadow 是链接器管理的关键安全特性。它提供了一个查找表，将代码地址映射到 CFI 验证信息。
 
-### 7.6.4 Block Allocator
+- **延迟初始化**：仅在加载第一个启用 CFI 的库时才创建，避免性能浪费。
+- **16 位粒度**：每个 Shadow 条目是一个 16 位值，编码一段代码地址范围的验证信息。
+- **更新时机**：在库加载后（构造函数运行前）和卸载前更新，确保一致性。
+- **失效处理**：若 CFI 检查失败，调用 `__loader_cfi_fail` 进行集中崩溃处理。
 
-linker 在早期启动阶段不能随意依赖普通 malloc，也希望避免大量小对象分配带来的开销。因此它使用 block allocator 管理内部对象，例如 `soinfo`、namespace、load task 等。block allocator 以大块内存为单位分配，再切分给 linker 内部结构使用。
+### 7.6.4 Block Allocator（块分配器）
 
-### 7.6.5 Linker 中的 Sanitizer 支持
+链接器使用自定义的块分配器（`LinkerTypeAllocator`）而非 `malloc` 来分配 `soinfo` 等结构。
 
-linker 支持 ASan、HWASan 等 sanitizer 模式下的库路径重定向和运行时行为。启用 sanitizer 时，linker 会优先搜索 sanitizer instrumented 库路径，并确保 sanitizer runtime 在正确时机加载。
+1. **确定性布局**：所有 `soinfo` 结构位于已知页面，便于通过 `ProtectedDataGuard` 进行写保护。
+2. **无 Malloc 依赖**：在 libc.so 加载之前的早期初始化阶段，链接器无法使用 `malloc`。
+3. **安全强化**：在 `dlopen`/`dlclose` 调用的间隙，链接器元数据页面会被 `mprotect` 设为只读。
 
-### 7.6.6 完整进程启动序列
+### 7.6.5 完整进程启动序列
 
-完整 native 进程启动序列如下：
+从 `execve()` 到 `main()` 的完整序列：
 
-```mermaid
-sequenceDiagram
-    participant P as Parent
-    participant K as Kernel
-    participant L as Linker
-    participant C as Bionic libc
-    participant A as App
+1. **内核阶段**：解析 ELF 头部，映射 `PT_LOAD` 段，映射解释器（`linker64`），设置辅助向量（Auxiliary Vector）和栈，跳转至链接器。
+2. **链接器自举**：`__linker_init` 进行自重定位（无外部依赖）。
+3. **环境初始化**：清理敏感环境变量，初始化系统属性，初始化 BTI/MTE 硬件特性。
+4. **可执行文件设置**：创建 `somain` 的 `soinfo`。
+5. **依赖解析**：广度优先搜索（BFS）遍历 `DT_NEEDED` 依赖树，调用 `ElfReader` 加载库。
+6. **链接阶段**：遍历所有库执行 `prelink_image` 和 `link_image`（重定位），处理 RELRO。
+7. **VDSO 链接**：将内核映射的 `[vdso]` 接入 `soinfo` 链表。
+8. **MTE 与 TLS**：初始化主线程静态 TLS，完成 MTE 堆栈保护设置。
+9. **CFI 设置**：初始化 CFI Shadow 表。
+10. **构造函数调用**：先调用 libc 的 `.preinit_array`，然后按依赖顺序调用各库的构造函数（Constructors）。
+11. **移交控制权**：跳转至 `AT_ENTRY`，进入应用的 `_start` -> `__libc_init` -> `main()`。
 
-    P->>K: execve(path, argv, envp)
-    K->>K: 解析 ELF header
-    K->>K: 映射 executable PT_LOAD
-    K->>K: 读取 PT_INTERP
-    K->>L: 映射 linker 并跳转 _start
-    L->>L: __linker_init 自重定位
-    L->>L: linker_main 初始化属性/namespace
-    L->>L: 加载 DT_NEEDED 依赖
-    L->>L: 映射 segments 并重定位
-    L->>L: 调用 .init_array constructors
-    L->>C: 跳转 executable entry
-    C->>C: __libc_init
-    C->>A: main(argc, argv, envp)
+### 7.6.6 架构特定的系统调用约定
+
+Bionic 支持的五种架构的系统调用约定参考表：
+
+| 架构 | 系统调用号寄存器 | 参数 1 | 参数 2 | 参数 3 | 参数 4 | 参数 5 | 参数 6 | 指令 | 返回值 |
+|-------------|---------------|-------|-------|-------|-------|-------|-------|-------------|--------|
+| arm | r7 | r0 | r1 | r2 | r3 | r4 | r5 | `swi #0` | r0 |
+| arm64 | x8 | x0 | x1 | x2 | x3 | x4 | x5 | `svc #0` | x0 |
+| x86 | eax | ebx | ecx | edx | esi | edi | ebp | `int $0x80` | eax |
+| x86_64 | rax | rdi | rsi | rdx | r10 | r8 | r9 | `syscall` | rax |
+| riscv64 | a7 | a0 | a1 | a2 | a3 | a4 | a5 | `ecall` | a0 |
+
+在出错时，返回值在 [-4095, -1] 范围内。Bionic 的 stub 程序会取反该值并存入 `errno`。注意 32 位 x86 只有 6 个参数寄存器，且 socket 操作通过 `socketcall` 复用。
+
+### 7.6.7 链接器配置文件格式参考
+
+链接器启动时解析的 `ld.config.txt` 语法摘要：
+
+```
+config     := section*
+section    := "[" name "]" newline property*
+property   := name "=" value | name "+=" value
+
+# 命名空间属性
+namespace.<ns>.search.paths = <路径列表>
+namespace.<ns>.permitted.paths = <允许路径列表>
+namespace.<ns>.isolated = true|false
+namespace.<ns>.visible = true|false
+namespace.<ns>.links = <目标命名空间列表>
+namespace.<ns>.link.<target>.shared_libs = <共享库列表>
+
+# 节选择器
+dir.<section> = <路径前缀>
+additional.namespaces = <命名空间列表>
 ```
 
-这个序列说明了 linker 为什么是 Android 中最敏感的性能组件之一。linker 中的每一微秒都会乘以进程启动次数。符号缓存、模板特化 relocation loop、NEON hash、protected-data guard 等优化，最终都服务于降低启动开销。
+`${LIB}` 占位符在 32 位系统扩展为 `lib`，64 位扩展为 `lib64`。`$ORIGIN` 扩展为当前库所在的目录。
 
-### 7.6.7 错误消息与诊断
+---
 
-linker 在链接失败时会提供详细错误信息。理解这些信息是调试 native 库问题的关键：
+## 总结
 
-| 错误信息 | 原因 | 解决方式 |
-|--------------|-------|---------|
-| `"libfoo.so" not found` | 搜索路径中没有库 | 检查 namespace 路径、APK lib 目录 |
-| `cannot locate symbol "bar" referenced by "libfoo.so"` | 强符号未解析 | 检查库依赖和符号可见性 |
-| `"libfoo.so" is not accessible for the namespace "default"` | namespace 隔离 | 检查 linkerconfig、manifest `uses-native-library` |
-| `"libfoo.so" is 32-bit instead of 64-bit` | ABI 不匹配 | 为正确架构构建库 |
-| `"libfoo.so" has bad ELF magic` | 文件损坏或不是 ELF | 校验文件完整性 |
-| `Android only supports position-independent executables` | 非 PIE 可执行文件 | 使用 `-fPIE -pie` 重建 |
-| `has load segments that are both writable and executable` | W+E segment | 修正 linker script，拆分 segment |
-| `program alignment cannot be smaller than system page size` | 16KiB 系统加载 4KiB 对齐库 | 使用 16KiB 对齐重建或启用兼容模式 |
+本章追踪了 Android 原生执行环境从底层到顶层的全路径：从 `SYSCALLS.TXT` 生成的系统调用 stub、限制调用权限的 Seccomp-BPF 过滤器，到提供 POSIX 基础的 C 库，最后到编排库加载、符号解析和命名空间隔离的动态链接器。
 
-### 7.6.8 性能考虑
+核心要点：
+1. **Bionic 是为 Android 量身定制的**：其 BSD 许可证、极小的体积、快速启动以及深度集成使其与 glibc 本质不同。
+2. **系统调用接口是自动生成的**：通过声明式定义实现跨五种架构的一致性。
+3. **Seccomp-BPF 在内核级别构建安全边界**：通过白名单过滤限制内核攻击面。
+4. **动态链接器是原生代码的守门人**：负责 ELF 加载、ASLR/BTI 安全增强以及高性能重定位。
+5. **链接器命名空间强制执行 Treble 架构边界**：通过 `linkerconfig` 配置的命名空间隔离平台、供应商和产品代码，实现模块化解耦。
 
-linker 性能直接影响应用启动时间和系统启动时间。关键点包括：
-
-**重定位处理：**
-
-- 模板特化的 `process_relocation_impl<Mode>` 生成多条专用路径，减少常见情况分支开销。
-- 符号缓存减少重复 hash table 查找，典型负载中命中率可超过 80%。
-- `__predict_false` 和 `__predict_true` 帮助编译器优化分支预测。
-
-**ELF 加载：**
-
-- `ElfReader` 使用 `MappedFileFragment` 零拷贝读取 header。
-- Segment 映射使用 `MAP_FIXED | MAP_PRIVATE` 替换预留的 `PROT_NONE` 区域。
-- Transparent huge pages（`MADV_HUGEPAGE`）降低大代码段 TLB 压力。
-
-**内存管理：**
-
-- block allocator 避免 linker 内部结构频繁 malloc/free。
-- `purge_unused_memory()` 在交给应用前释放不再需要的内部 buffer。
-- RELRO 保护 GOT 等已解析区域，使只读页可在进程间共享。
-
-启用 `LD_DEBUG=timing` 时，linker 会报告总耗时：
-
-```text
-LINKER TIME: /system/bin/app_process64: 15234 microseconds
-```
-
-### 关键源码文件参考
-
-| 文件 | 路径 | 用途 |
-|------|------|---------|
-| `SYSCALLS.TXT` | `bionic/libc/SYSCALLS.TXT` | 系统调用定义 |
-| `gensyscalls.py` | `bionic/libc/tools/gensyscalls.py` | Stub 生成器 |
-| `SECCOMP_BLOCKLIST_APP.TXT` | `bionic/libc/SECCOMP_BLOCKLIST_APP.TXT` | 应用禁用 syscall |
-| `SECCOMP_ALLOWLIST_APP.TXT` | `bionic/libc/SECCOMP_ALLOWLIST_APP.TXT` | 应用额外允许 syscall |
-| `SECCOMP_ALLOWLIST_COMMON.TXT` | `bionic/libc/SECCOMP_ALLOWLIST_COMMON.TXT` | 全局额外允许 syscall |
-| `SECCOMP_BLOCKLIST_COMMON.TXT` | `bionic/libc/SECCOMP_BLOCKLIST_COMMON.TXT` | 全局禁用 syscall |
-| `SECCOMP_PRIORITY.TXT` | `bionic/libc/SECCOMP_PRIORITY.TXT` | 热路径 syscall |
-| `seccomp_policy.cpp` | `bionic/libc/seccomp/seccomp_policy.cpp` | BPF filter 生成 |
-| `syscall.S` (arm64) | `bionic/libc/arch-arm64/bionic/syscall.S` | AArch64 syscall 入口 |
-| `ifuncs.cpp` (arm64) | `bionic/libc/arch-arm64/ifuncs.cpp` | IFUNC resolver |
-| `libc_init_dynamic.cpp` | `bionic/libc/bionic/libc_init_dynamic.cpp` | 动态初始化 |
-| `libc_init_common.cpp` | `bionic/libc/bionic/libc_init_common.cpp` | 通用初始化 |
-| `malloc_common.cpp` | `bionic/libc/bionic/malloc_common.cpp` | allocator dispatch |
-| `pthread_create.cpp` | `bionic/libc/bionic/pthread_create.cpp` | 线程创建 |
-| `linker.cpp` | `bionic/linker/linker.cpp` | 核心 linker 逻辑 |
-| `linker_main.cpp` | `bionic/linker/linker_main.cpp` | linker 入口与主流程 |
-| `linker_phdr.cpp` | `bionic/linker/linker_phdr.cpp` | ELF 加载 |
-| `linker_relocate.cpp` | `bionic/linker/linker_relocate.cpp` | 重定位处理 |
-| `linker_namespaces.h` | `bionic/linker/linker_namespaces.h` | namespace 结构 |
-| `linker_soinfo.h` | `bionic/linker/linker_soinfo.h` | `soinfo` 定义 |
-| `linker_config.cpp` | `bionic/linker/linker_config.cpp` | 配置解析器 |
-| `dlfcn.cpp` | `bionic/linker/dlfcn.cpp` | `dlopen` / `dlsym` API |
-| `vndk.go` | `build/soong/cc/vndk.go` | VNDK 构建定义 |
-| `main.cc` | `system/linkerconfig/main.cc` | Linkerconfig 入口 |
-| `systemdefault.cc` | `system/linkerconfig/contents/namespace/systemdefault.cc` | System namespace |
-| `vendordefault.cc` | `system/linkerconfig/contents/namespace/vendordefault.cc` | Vendor namespace |
-| `vndk.cc` | `system/linkerconfig/contents/namespace/vndk.cc` | VNDK namespace |
-| `system_links.cc` | `system/linkerconfig/contents/common/system_links.cc` | Bionic lib links |
+这些组件共同构成了每个 Android 进程运行的原生运行时基石。

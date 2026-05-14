@@ -93,7 +93,7 @@ service audioserver /system/bin/audioserver
 | `SpatializerThread` | 空间音频处理 |
 | Command / Policy 线程 | 路由和控制命令 |
 
-### 15.1.8 延迟预算
+延迟预算：
 
 音频延迟通常由以下部分组成：
 
@@ -105,7 +105,7 @@ service audioserver /system/bin/audioserver
 
 低延迟路径努力把总延迟压缩到几十毫秒甚至更低，但会受硬件、HAL 与功耗策略约束。
 
-### 15.1.9 音频格式支持
+### 15.1.8 音频格式支持
 
 Android 音频系统支持 PCM、压缩格式、浮点、16-bit、24-bit/packed、32-bit 等多种格式，并支持不同 channel mask、sample rate 与 encoded stream 类型。系统在流建立阶段会判断是否需要格式转换、重采样和 downmix/upmix。
 
@@ -186,7 +186,7 @@ Track 表示单个播放源。它管理：
 
 FastMixer 是 AudioFlinger 中的低延迟混音子系统，适用于小 buffer、固定格式、严格实时要求的流，如游戏、实时音频和部分通知场景。
 
-#### FastMixer 线程循环
+#### 快速混音器线程循环（FastMixer）
 
 FastMixer 使用更短周期、更严格优先级和更少处理阶段，尽量避免复杂效果和重采样，以缩短从 app 写入到 HAL 输出的时间。
 
@@ -605,83 +605,143 @@ Direct playback 让流绕过通用混音路径直接连接输出设备，适合�
 
 ---
 
-## 15.10 动手实践
+## 15.10 Debugging and Performance Analysis
 
-### Exercise 1: Dump the Audio System State
+### 15.10.1 Audio System Properties
+
+系统属性可控制日志级别、低延迟策略、效果调试和部分实验特性，是调试音频系统的重要开关。
+
+### 15.10.2 Media Metrics
+
+Media metrics 记录音频会话、设备、错误、延迟和性能数据，为调试和产品质量分析提供基础。
+
+### 15.10.3 Systrace 集成
+
+Systrace/Perfetto 可展示 audio thread 周期、AudioFlinger 工作段、Binder 调用和调度延迟，是定位 underrun 与抖动的重要工具。
+
+### 15.10.4 Mutex 统计
+
+锁争用会直接破坏实时线程稳定性。统计 mutex 等待时间有助于发现 AudioFlinger、Policy 和 HAL 之间的锁热点。
+
+### 15.10.5 常见音频问题
+
+常见问题包括：
+
+- underrun / overrun
+- 路由错误
+- 蓝牙延迟过高
+- sample rate 不匹配
+- fast path 未命中
+- 线程优先级不足
+- 效果链过重
+
+### 15.10.6 `TimerQueue`
+
+TimerQueue 用于音频系统中部分延时操作、超时控制与后台任务调度。
+
+### 15.10.7 PowerManager 集成
+
+音频系统会与 PowerManager 协作，以管理唤醒锁、设备待机、音频活跃状态和低功耗策略。
+
+### 15.10.8 `TimeCheck` 看门狗
+
+TimeCheck watchdog 用于检测耗时过长的音频操作，帮助发现 HAL 卡死、策略阻塞或死锁风险。
+
+### 15.10.9 死锁检测
+
+音频系统中的多线程锁层次复杂。死锁检测机制与调试日志有助于发现线程间循环等待。
+
+### 15.10.10 内存泄漏检测
+
+音频资源包括 track、effect、HAL stream、共享缓冲与 Binder 引用。泄漏检测对长期稳定性至关重要。
+
+### 15.10.11 电池归因
+
+系统需要知道哪个 UID 在持续播放、录音或占用低延迟资源，以便进行功耗归因与限制。
+
+性能基准：
+
+关键基准包括启动延迟、回放延迟、round-trip latency、CPU 占用、xrun 率和蓝牙模式切换时延。
+
+---
+
+## 15.11 动手实践
+
+### 练习 1：导出音频系统状态
 
 ```bash
-# Dump AudioFlinger state
+# 导出 AudioFlinger 状态
 adb shell dumpsys media.audio_flinger
-# Dump AudioPolicy state
+# 导出 AudioPolicy 状态
 adb shell dumpsys media.audio_policy
-# Dump AAudio service state
+# 导出 AAudio service 状态
 adb shell dumpsys media.aaudio
 ```
 
-### Exercise 2: Trace an AudioTrack from Java to HAL
+### 练习 2：从 Java 到 HAL 跟踪 AudioTrack
 
 从 Java `AudioTrack` 开始，沿 JNI、`AudioSystem`、AudioFlinger `createTrack()`、PlaybackThread 和 HAL open stream 路径逐层跟踪。
 
-### Exercise 3: Observe the FastMixer
+### 练习 3：观察 FastMixer
 
 ```bash
-# Check if FastMixer is active
+# 检查 FastMixer 是否活跃
 adb shell dumpsys media.audio_flinger | grep -i FastMixer
 ```
 
-### Exercise 4: List Audio Devices and Patches
+### 练习 4：列出音频设备与 Patch
 
 ```bash
-# List audio ports
+# 列出 audio port
 adb shell dumpsys media.audio_policy | grep -i port
-# List audio patches
+# 列出 audio patch
 adb shell dumpsys media.audio_policy | grep -i patch
 ```
 
-### Exercise 5: AAudio MMAP Detection
+### 练习 5：检测 AAudio MMAP
 
 ```bash
-# Check MMAP policy
+# 检查 MMAP 策略
 adb shell dumpsys media.aaudio | grep -i mmap
-# Check AAudio configuration
+# 检查 AAudio 配置
 adb shell dumpsys media.aaudio
 ```
 
-### Exercise 6: Audio Effects Inspection
+### 练习 6：检查音效
 
 ```bash
-# List available effects
+# 列出可用 effect
 adb shell dumpsys media.audio_flinger | grep -i effect
-# List effects on a specific session
+# 列出特定 session 上的 effect
 adb shell dumpsys media.audio_flinger
 ```
 
-### Exercise 7: Build and Run AAudio CTS Tests
+### 练习 7：构建并运行 AAudio CTS 测试
 
 ```bash
-# Build AAudio tests
+# 构建 AAudio 测试
 m CtsNativeMediaAAudioTestCases
-# Run AAudio tests
+# 运行 AAudio 测试
 atest CtsNativeMediaAAudioTestCases
 ```
 
-### Exercise 8: Monitor Sound Dose
+### 练习 8：监控 Sound Dose
 
 ```bash
-# Check MEL (Measured Exposure Level) reporting
+# 检查 MEL（Measured Exposure Level）上报
 adb shell dumpsys media.audio_flinger | grep -i mel
 ```
 
-### Exercise 9: Spatial Audio Testing
+### 练习 9：测试空间音频
 
 ```bash
-# Check spatializer status
+# 检查 spatializer 状态
 adb shell dumpsys media.audio_policy | grep -i spatial
-# Check head tracking status
+# 检查 head tracking 状态
 adb shell dumpsys media.audio_policy | grep -i head
 ```
 
-### Exercise 10: Write a Minimal AAudio Application
+### 练习 10：编写最小 AAudio 应用
 
 可基于 NDK AAudio API 创建最小播放或录音应用，验证 builder、callback 与 MMAP 模式选择。
 
@@ -694,155 +754,94 @@ cc_binary {
 }
 ```
 
-### Exercise 11: Inspect Audio Policy Configuration
+### 练习 11：检查 Audio Policy 配置
 
 ```bash
-# Find the audio policy configuration file
+# 查找 audio policy 配置文件
 adb shell find /vendor /system -name '*audio_policy*.xml'
-# Read it
+# 读取配置文件
 adb shell cat /vendor/etc/audio_policy_configuration.xml
 ```
 
-### Exercise 12: Explore the AAudio FIFO
+### 练习 12：探索 AAudio FIFO
 
 通过 trace 或调试日志观察 FIFO 深度变化、xrun 和 callback 周期。
 
-### Exercise 13: Monitor Effect Chain Activity
+### 练习 13：监控 Effect Chain 活动
 
 ```bash
-# Watch effect chains in real-time
+# 实时观察 effect chain
 adb logcat | grep -i AudioFlinger
 ```
 
-### Exercise 14: Capture Audio Policy Decisions
+### 练习 14：捕获 Audio Policy 决策
 
 ```bash
-# Enable verbose audio policy logging
+# 开启 verbose audio policy 日志
 adb shell setprop log.tag.AudioPolicyManager VERBOSE
-# Watch the log for routing decisions
+# 在日志中观察路由决策
 adb logcat | grep -i AudioPolicy
 ```
 
-### Exercise 15: Measure Audio Round-Trip Latency
+### 练习 15：测量音频 Round-Trip Latency
 
 ```bash
-# Install OboeTester (from the Oboe repository)
+# 安装 OboeTester，来源为 Oboe 仓库
 ```
 
 使用 OboeTester 等工具测量从扬声器输出到麦克风回采的 round-trip latency。
 
-### Exercise 16: Observe Thread Scheduling
+### 练习 16：观察线程调度
 
 ```bash
-# Check audio thread priorities
+# 检查音频线程优先级
 adb shell ps -T -p $(adb shell pidof audioserver)
-# Check real-time priorities
+# 检查实时优先级
 adb shell dumpsys media.audio_flinger | grep -i priority
 ```
 
-### Exercise 17: Inspect AIDL Audio HAL
+### 练习 17：检查 AIDL Audio HAL
 
 ```bash
-# Check if AIDL HAL is running
+# 检查 AIDL HAL 是否正在运行
 adb shell ps -A | grep -i audio
-# Dump HAL state
+# 导出 HAL 状态
 adb shell dumpsys media.audio_policy
-# List available audio ports from HAL
+# 列出 HAL 暴露的可用 audio port
 adb shell dumpsys media.audio_policy | grep -i port
 ```
 
-### Exercise 18: Head Tracking Debug
+### 练习 18：调试 Head Tracking
 
 ```bash
-# Check head tracking sensor status
+# 检查 head tracking sensor 状态
 adb shell dumpsys media.audio_policy | grep -i tracking
-# Check pose data
+# 检查 pose 数据
 adb shell dumpsys media.audio_policy | grep -i pose
 ```
 
-### Exercise 19: Monitor MMAP Stream Health
+### 练习 19：监控 MMAP Stream 健康状态
 
 ```bash
-# Check active MMAP streams
+# 检查活跃 MMAP stream
 adb shell dumpsys media.aaudio | grep -i mmap
-# Check endpoint state
+# 检查 endpoint 状态
 adb shell dumpsys media.aaudio
 ```
 
-### Exercise 20: Audio HAL Latency Modes
+### 练习 20：Audio HAL 延迟模式
 
 ```bash
-# Check supported latency modes
+# 检查支持的 latency mode
 adb shell dumpsys media.audio_policy | grep -i latency
-# Check current latency mode
+# 检查当前 latency mode
 adb shell dumpsys media.audio_flinger | grep -i latency
 ```
 
 ---
 
-## 15.11 调试与性能分析
+## 小结
 
-### 15.11.1 Audio System Properties
-
-系统属性可控制日志级别、低延迟策略、效果调试和部分实验特性，是调试音频系统的重要开关。
-
-### 15.11.2 Media Metrics
-
-Media metrics 记录音频会话、设备、错误、延迟和性能数据，为调试和产品质量分析提供基础。
-
-### 15.11.3 Systrace 集成
-
-Systrace/Perfetto 可展示 audio thread 周期、AudioFlinger 工作段、Binder 调用和调度延迟，是定位 underrun 与抖动的重要工具。
-
-### 15.11.4 Mutex 统计
-
-锁争用会直接破坏实时线程稳定性。统计 mutex 等待时间有助于发现 AudioFlinger、Policy 和 HAL 之间的锁热点。
-
-### 15.11.5 常见音频问题
-
-常见问题包括：
-
-- underrun / overrun
-- 路由错误
-- 蓝牙延迟过高
-- sample rate 不匹配
-- fast path 未命中
-- 线程优先级不足
-- 效果链过重
-
-### 15.11.6 `TimerQueue`
-
-TimerQueue 用于音频系统中部分延时操作、超时控制与后台任务调度。
-
-### 15.11.7 PowerManager 集成
-
-音频系统会与 PowerManager 协作，以管理唤醒锁、设备待机、音频活跃状态和低功耗策略。
-
-### 15.11.8 `TimeCheck` 看门狗
-
-TimeCheck watchdog 用于检测耗时过长的音频操作，帮助发现 HAL 卡死、策略阻塞或死锁风险。
-
-### 15.11.9 死锁检测
-
-音频系统中的多线程锁层次复杂。死锁检测机制与调试日志有助于发现线程间循环等待。
-
-### 15.11.10 内存泄漏检测
-
-音频资源包括 track、effect、HAL stream、共享缓冲与 Binder 引用。泄漏检测对长期稳定性至关重要。
-
-### 15.11.11 电池归因
-
-系统需要知道哪个 UID 在持续播放、录音或占用低延迟资源，以便进行功耗归因与限制。
-
-### 15.11.12 性能基准
-
-关键基准包括启动延迟、回放延迟、round-trip latency、CPU 占用、xrun 率和蓝牙模式切换时延。
-
----
-
-## Summary
-
-## 总结
 
 Android 音频系统围绕几个核心原则构建：
 
@@ -867,7 +866,7 @@ Android 音频栈主要组件关系如下：
 | Audio HAL | 连接 framework 与具体设备 |
 | `AudioTrack` / `AudioRecord` | 客户端基础 API |
 
-### Source File Reference
+### 源码参考
 
 | 路径 | 用途 |
 |------|------|
@@ -879,11 +878,11 @@ Android 音频栈主要组件关系如下：
 | `hardware/interfaces/audio/aidl/` | Audio HAL AIDL 接口 |
 | `frameworks/av/media/libeffects/` | 效果框架实现 |
 
-### Component Counts
+组件数量：
 
 音频系统由大量线程、track、effect chain、端口、patch 和设备组合构成，其运行时拓扑会随应用、设备和路由策略动态变化。
 
-### Key Concepts Glossary
+### 核心概念术语表
 
 | 术语 | 说明 |
 |------|------|
@@ -898,7 +897,7 @@ Android 音频栈主要组件关系如下：
 | MEL | 声暴露级别监测 |
 | Offload | 硬件/DSP 直通处理 |
 
-### Architecture Decision Record
+### 架构决策记录
 
 音频系统的关键架构决策集中体现在三点：
 
@@ -908,6 +907,6 @@ Android 音频栈主要组件关系如下：
 
 这些决策共同支撑了 Android 在多设备、多应用并发和复杂路由条件下仍能保持音频稳定性的能力。
 
-### Further Reading
+### 延伸阅读
 
 建议继续阅读媒体、蓝牙、传感器与空间音频相关章节，以建立更完整的跨子系统理解。

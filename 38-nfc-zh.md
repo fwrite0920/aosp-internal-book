@@ -6,8 +6,6 @@ NFC 是 Android 平台里一个很有代表性的“小入口、大系统”子�
 
 ## 38.1 NFC 架构
 
-### 38.1.1 NFC 是什么
-
 NFC（Near Field Communication，近场通信）工作在 13.56 MHz，典型距离为 0 到 4 厘米。它最大的特征不是吞吐量，而是“物理接近”本身可以成为一种天然交互和认证约束：必须非常靠近，才能完成支付、读卡、配对或门禁交互。
 
 在射频层面，通常由一方产生 RF 场，另一方通过调制这个场完成通信。因此 NFC 很适合：
@@ -17,7 +15,7 @@ NFC（Near Field Communication，近场通信）工作在 13.56 MHz，典型距�
 - 门禁和票卡
 - 短距离设备交互
 
-### 38.1.2 标准与工作模式
+### 38.1.1 标准与工作模式
 
 Android 中常见的 NFC 技术映射如下：
 
@@ -39,7 +37,7 @@ Android 的 NFC 主要工作在三种模式：
 
 其中 P2P 曾用于 Android Beam，但该能力已在较新版本中淡出。
 
-### 38.1.3 AOSP NFC 栈分层
+### 38.1.2 AOSP NFC 栈分层
 
 下图展示 Android NFC 的主要分层关系。
 
@@ -102,7 +100,7 @@ graph TB
     NFCC --> SE
 ```
 
-### 38.1.4 关键源码目录
+### 38.1.3 关键源码目录
 
 | 目录 | 作用 |
 |---|---|
@@ -115,7 +113,7 @@ graph TB
 | `hardware/interfaces/nfc/aidl/` | AIDL HAL |
 | `packages/modules/Nfc/apex/` | Mainline APEX 打包 |
 
-### 38.1.5 `NfcAdapter`
+### 38.1.4 `NfcAdapter`
 
 `NfcAdapter` 位于 `packages/modules/Nfc/framework/java/android/nfc/NfcAdapter.java`，是应用访问 NFC 的主入口。三个最重要的标签分发 intent 常量都定义在这里：
 
@@ -135,7 +133,7 @@ public static final String ACTION_TAG_DISCOVERED =
 - `isEnabled()`
 - `ignore()`
 
-### 38.1.6 `NfcService`
+### 38.1.5 `NfcService`
 
 `NfcService` 位于 `packages/modules/Nfc/NfcNci/src/com/android/nfc/NfcService.java`，是 NFC 子系统的中心守护进程。它不运行在 `system_server` 中，而是在独立的 `com.android.nfc` 进程中。
 
@@ -147,11 +145,11 @@ public static final String ACTION_TAG_DISCOVERED =
 - 管理 HCE 和路由表
 - 暴露 Binder API 给 `NfcAdapter`
 
-### 38.1.7 NFC HAL
+### 38.1.6 NFC HAL
 
 NFC HAL 负责把主机侧 NCI 栈与 vendor 控制器驱动连接起来。当前主接口是 AIDL 的 `android.hardware.nfc.INfc`，为 Mainline 和 VINTF 稳定性服务。
 
-### 38.1.8 NCI
+### 38.1.7 NCI
 
 NCI（NFC Controller Interface）是主机和 NFCC 之间的标准协议。AOSP 中对应实现是 `libnfc-nci`。它采用 command / response / notification 模型：
 
@@ -172,7 +170,7 @@ sequenceDiagram
 - `0x02`: NFCEE Management
 - `0x0F`: 厂商私有
 
-### 38.1.9 NFC Mainline 模块
+### 38.1.8 NFC Mainline 模块
 
 较新 Android 版本中，NFC 栈已经作为 Mainline 模块 `com.android.nfcservices` 发布，意味着：
 
@@ -183,7 +181,7 @@ sequenceDiagram
 
 可以作为一个整体通过 Mainline 机制更新。
 
-### 38.1.10 从 RF 场到 Intent 的完整路径
+### 38.1.9 从 RF 场到 Intent 的完整路径
 
 ```mermaid
 sequenceDiagram
@@ -806,7 +804,7 @@ atest VtsHalNfcTargetTest
 
 ---
 
-## 38.11 Summary
+## 小结
 
 - Android NFC 栈是一个完整的层次化系统，覆盖 AIDL HAL、`libnfc-nci`、JNI、`NfcService`、framework API 和应用层。
 - `NfcService` 是系统中心，负责硬件生命周期、标签发现、分发、HCE 管理和路由表更新。
@@ -817,7 +815,7 @@ atest VtsHalNfcTargetTest
 - Reader Mode、foreground dispatch、HCE、HCE-F 和 NFC-V 分别对应不同的系统控制路径，理解它们的边界比单独记 API 更重要。
 - 排查 NFC 问题时，`dumpsys nfc`、VINTF 声明、HAL AIDL、系统属性和 debug log 往往比只看应用代码更有效。
 
-### 关键源码
+关键源码：
 
 | 文件 | 路径 |
 |---|---|

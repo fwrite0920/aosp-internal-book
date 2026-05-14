@@ -2,22 +2,6 @@
 
 Android 的 Activity 和 Window 管理系统横跨 `ActivityManagerService`、`ActivityTaskManagerService`、`WindowManagerService`、`ActivityRecord`、`Task`、`DisplayContent`、`WindowState`、`ProcessList` 等多个核心组件。它负责 Activity 启动、任务栈组织、进程优先级调整、窗口添加、焦点与可见性计算、多窗口、配置变更和 ANR 检测。本章从 AOSP 源码视角梳理 AMS/ATMS/WMS 的协同机制与常见调试路径。
 
----
-
-## Source Files Referenced in This Chapter
-
-本章重点涉及的源码通常集中在以下路径：
-
-| 路径 | 作用 |
-|------|------|
-| `frameworks/base/services/core/java/com/android/server/am/` | AMS、进程与 OOM 管理 |
-| `frameworks/base/services/core/java/com/android/server/wm/` | ATMS、WMS、Task、ActivityRecord、DisplayContent |
-| `frameworks/base/core/java/android/app/` | Activity 启动客户端接口与 AIDL |
-| `frameworks/base/core/java/android/view/` | WindowManager 客户端接口 |
-| `frameworks/base/core/java/android/window/` | 新式窗口与过渡相关 API |
-
----
-
 ## 22.1 AMS 与 ATMS 架构
 
 ### 22.1.1 历史背景：大拆分
@@ -310,294 +294,229 @@ AMS 使用 LRU 列表维护缓存进程顺序，为 LMKD 与内部回收策略�
 
 ---
 
-## 22.8 动手实践：Tracing 与调试
+## 22.8 深入解析：`setState()` 方法与状态转换
 
-### 22.8.1 Exercise 1：用 Perfetto 追踪 Activity 启动
-
-```bash
-# On the device, start a trace capturing the relevant categories
-# In another terminal, launch an activity
-# Open in https://ui.perfetto.dev/
-```
-
-### 22.8.2 Exercise 2：用 `dumpsys` 检查窗口层级
-
-```bash
-# Full window dump
-# More concise -- just the hierarchy
-# Activity-focused dump
-# Dump details for a specific package
-```
-
-### 22.8.3 Exercise 3：监控 Activity 生命周期事件
-
-```bash
-# Monitor ActivityManager events
-# Or use the more detailed WM tags
-```
-
-### 22.8.4 Exercise 4：检查进程优先级
-
-```bash
-# View all processes and their OOM adj
-# Or get the raw values from procfs
-```
-
-### 22.8.5 Exercise 5：强制配置变更
-
-```bash
-# Rotate the screen
-# Watch the logs
-```
-
-### 22.8.6 Exercise 6：用 `am` 命令检查 Task 状态
-
-```bash
-# List all tasks
-# Get task details
-# Start an activity in a specific task
-# Move a task to front
-# Remove a task
-```
-
-### 22.8.7 Exercise 7：使用 `wm` 命令做窗口检查
-
-```bash
-# Get display info
-# Override display size (useful for testing)
-# Reset overrides
-# Get surface flinger state
-```
-
-### 22.8.8 面向 Framework 开发者的调试提示
-
-优先结合 `dumpsys activity`、`dumpsys window`、Perfetto、WMS 日志和 AMS/ATMS 源码共同定位问题。
-
----
-
-## 22.9 深入解析：`setState()` 方法与状态转换
-
-### 22.9.1 `setState()` 实现
+### 22.8.1 `setState()` 实现
 
 `ActivityRecord.setState()` 是生命周期状态推进的关键方法，会同步统计、可见性和调试信息。
 
-### 22.9.2 状态转换触发器
+### 22.8.2 状态转换触发器
 
 触发器包括启动、pause/resume、配置变化、用户切换、进程死亡与任务重排。
 
-### 22.9.3 电池与使用统计集成
+### 22.8.3 电池与使用统计集成
 
 状态变化常与 usage stats、电池统计与事件日志联动。
 
 ---
 
-## 22.10 高级主题：`resumeTopActivity` 管线
+## 22.9 高级主题：`resumeTopActivity` 管线
 
-### 22.10.1 递归 Resume 模式
+### 22.9.1 递归 Resume 模式
 
 ATMS 在某些层级结构中会递归寻找和恢复最顶层可 resume 的 activity。
 
-### 22.10.2 Pause-Before-Resume 协议
+### 22.9.2 Pause-Before-Resume 协议
 
 Android 通常先确保当前 resumed activity 完成 pause，再继续 resume 下一个 activity，以维持生命周期一致性。
 
-### 22.10.3 Idle Timeout
+### 22.9.3 Idle Timeout
 
 当 activity 在预期时间内未进入 idle/resumed 等状态，系统会用 timeout 机制防止启动流程卡死。
 
 ---
 
-## 22.11 高级主题：`recycleTask()` 与 Intent Flag 处理
+## 22.10 高级主题：`recycleTask()` 与 Intent Flag 处理
 
-### 22.11.1 `recycleTask()` 逻辑
+### 22.10.1 `recycleTask()` 逻辑
 
 该逻辑涉及 task 复用与 ActivityRecord 重排，是 launch flags 生效的重要环节。
 
-### 22.11.2 Flag 处理：`CLEAR_TOP` 与 `SINGLE_TOP`
+### 22.10.2 Flag 处理：`CLEAR_TOP` 与 `SINGLE_TOP`
 
 这些 flag 决定是重用栈顶、清理上层 activity，还是投递 `onNewIntent()`。
 
-### 22.11.3 `deliverNewIntent` 机制
+### 22.10.3 `deliverNewIntent` 机制
 
 在可复用情况下，系统不会重建 activity，而是通过 `deliverNewIntent()` 把新的 intent 投递给现有实例。
 
 ---
 
-## 22.12 高级主题：多窗口与 TaskFragment 架构
+## 22.11 高级主题：多窗口与 TaskFragment 架构
 
-### 22.12.1 `TaskFragment`：嵌入容器
+### 22.11.1 `TaskFragment`：嵌入容器
 
 TaskFragment 是 modern window embedding 体系中的容器抽象，可在单个 task 内组织更细粒度的 activity 布局。
 
-### 22.12.2 `TaskFragmentOrganizer`
+### 22.11.2 `TaskFragmentOrganizer`
 
 Organizer 允许系统或可信组件管理 TaskFragment 生命周期和布局行为。
 
-### 22.12.3 Embedding 检查结果
+### 22.11.3 Embedding 检查结果
 
 系统会验证嵌入是否合法，例如窗口模式、尺寸、兼容性和组织者权限。
 
-### 22.12.4 分屏与自由窗
+### 22.11.4 分屏与自由窗
 
 多窗口系统最终都建立在 task/container/display 层级与 WMS 约束之上。
 
 ---
 
-## 22.13 高级主题：Starting Window（启动窗口 / Splash Screen）
+## 22.12 高级主题：Starting Window（启动窗口 / Splash Screen）
 
-### 22.13.1 目的与类型
+### 22.12.1 目的与类型
 
 Starting window 为应用第一帧真正可见前提供即时视觉占位，减少启动空白感。
 
-### 22.13.2 Starting Window 流程
+### 22.12.2 Starting Window 流程
 
 系统会在 activity 启动早期根据主题和场景添加 starting window，等到应用真实窗口 ready 后再移除。
 
-### 22.13.3 `addWindowInner()` 中的 Starting Window
+### 22.12.3 `addWindowInner()` 中的 Starting Window
 
 启动窗口本质仍是 WMS 窗口添加路径中的特定分支逻辑。
 
 ---
 
-## 22.14 高级主题：窗口布局引擎
+## 22.13 高级主题：窗口布局引擎
 
-### 22.14.1 `WindowSurfacePlacer`
+### 22.13.1 `WindowSurfacePlacer`
 
 它负责触发布局遍历和窗口表面放置，是 WMS 更新窗口几何与层级的关键入口。
 
-### 22.14.2 Display Policy
+### 22.13.2 Display Policy
 
 Display policy 会根据状态栏、导航栏、cutout、旋转和系统 UI 规则影响窗口布局。
 
 ---
 
-## 22.15 高级主题：配置变更传播
+## 22.14 高级主题：配置变更传播
 
-### 22.15.1 配置层级
+### 22.14.1 配置层级
 
 配置从 display、task、activity 到 app 逐层合并，形成最终交付给应用的 `Configuration`。
 
-### 22.15.2 合并配置
+### 22.14.2 合并配置
 
 Merged configuration 把全局和局部约束统一成对 activity 可见的最终结果。
 
-### 22.15.3 Activity 重建决策
+### 22.14.3 Activity 重建决策
 
 系统根据哪些配置项变化、manifest 声明和兼容行为决定是直接回调 `onConfigurationChanged()` 还是重启 activity。
 
 ---
 
-## 22.16 高级主题：Activity 系统中的 ANR 检测
+## 22.15 高级主题：Activity 系统中的 ANR 检测
 
-### 22.16.1 ANR 触发器
+### 22.15.1 ANR 触发器
 
 ANR 可由输入事件超时、广播超时、service 超时或 activity 生命周期卡住触发。
 
-### 22.16.2 输入 ANR 流程
+### 22.15.2 输入 ANR 流程
 
 输入子系统发现窗口无响应后会回调到 AMS/ATMS 的 ANR 路径，由 system_server 决定处理动作。
 
-### 22.16.3 `AnrController`
+### 22.15.3 `AnrController`
 
 AnrController 负责组织 ANR 报告、线程栈收集和最终用户可见行为。
 
 ---
 
-## 22.17 高级主题：Lock Task Mode
+## 22.16 高级主题：Lock Task Mode
 
-### 22.17.1 Overview
+### 22.16.1 Overview
 
 Lock Task Mode 用于 kiosk/企业场景，把任务栈限制在受控范围内。
 
-### 22.17.2 Lock Task 级别
+### 22.16.2 Lock Task 级别
 
 不同级别决定用户能否退出、切换任务或访问系统 UI。
 
-### 22.17.3 Lock Task 强制执行
+### 22.16.3 Lock Task 强制执行
 
 ATMS/WMS 会共同限制任务切换、返回行为和某些系统交互。
 
 ---
 
-## 22.18 高级主题：Recent Tasks 系统
+## 22.17 高级主题：Recent Tasks 系统
 
-### 22.18.1 `RecentTasks` 管理器
+### 22.17.1 `RecentTasks` 管理器
 
 负责维护最近任务列表、排序、清理和持久化。
 
-### 22.18.2 Task 持久化
+### 22.17.2 Task 持久化
 
 Recent task 元数据可持久化到磁盘，以支持重启后恢复。
 
-### 22.18.3 Task Snapshots
+### 22.17.3 Task Snapshots
 
 任务快照为 Recents 提供缩略图和快速视觉恢复能力。
 
 ---
 
-## 22.19 高级主题：可见性计算
+## 22.18 高级主题：可见性计算
 
-### 22.19.1 `ensureActivitiesVisible()`
+### 22.18.1 `ensureActivitiesVisible()`
 
 该方法会遍历容器树，决定哪些 activity 应该可见、停止或隐藏，是任务显示逻辑的关键点。
 
-### 22.19.2 `occludesParent()` 检查
+### 22.18.2 `occludesParent()` 检查
 
 某些窗口/容器是否完全遮挡父级，会影响后方 activity 的可见性和生命周期推进。
 
-### 22.19.3 TaskFragment 的可见性状态
+### 22.18.3 TaskFragment 的可见性状态
 
 TaskFragment 引入了更细粒度的局部可见性与嵌入场景管理。
 
 ---
 
-## 22.20 性能考量
+## 22.19 性能考量
 
-### 22.20.1 Activity 启动时间预算
+Activity 启动时间预算：
 
 启动预算横跨 intent 解析、task 决策、进程启动、应用 bind、首帧渲染和 starting window 切换。
 
-### 22.20.2 锁竞争
+### 22.19.1 锁竞争
 
 AMS/ATMS/WMS 的全局锁竞争会显著影响启动与交互时延。
 
-### 22.20.3 进程启动优化
+### 22.19.2 进程启动优化
 
 通过 Zygote 预加载、进程复用、冷启动预优化和启动窗口机制降低启动延迟。
 
 ---
 
-## 22.21 关键接口与 AIDL 契约
+## 22.20 关键接口与 AIDL 契约
 
-### 22.21.1 `IActivityManager`
+### 22.20.1 `IActivityManager`
 
 AMS 的核心 Binder 接口，暴露进程、广播、服务和部分活动管理能力。
 
-### 22.21.2 `IActivityTaskManager`
+### 22.20.2 `IActivityTaskManager`
 
 ATMS 的核心 Binder 接口，面向 activity 和 task 管理。
 
-### 22.21.3 `IWindowManager`
+### 22.20.3 `IWindowManager`
 
 WMS 的 Binder 接口，提供窗口、显示与部分全局 UI 控制能力。
 
-### 22.21.4 `IApplicationThread`
+### 22.20.4 `IApplicationThread`
 
 system_server 通过该接口回调应用进程，驱动生命周期和事务执行。
 
 ---
 
-## 22.22 常见调试模式
+## 22.21 常见调试模式
 
-### 22.22.1 诊断慢 Activity 启动
+### 22.21.1 诊断慢 Activity 启动
 
 重点观察 intent 解析、task 复用、进程创建、应用 attach、首帧绘制与 `reportFullyDrawn` 时序。
 
-### 22.22.2 诊断窗口添加失败
+### 22.21.2 诊断窗口添加失败
 
 重点检查 token、display、权限、window type 和 WMS 返回的错误码。
 
-### 22.22.3 诊断 Activity 状态问题
+### 22.21.3 诊断 Activity 状态问题
 
 ```bash
 # Check current activity state
@@ -605,7 +524,7 @@ system_server 通过该接口回调应用进程，驱动生命周期和事务执
 # Check for pending operations
 ```
 
-### 22.22.4 诊断 OOM Kill
+### 22.21.4 诊断 OOM Kill
 
 ```bash
 # Check recent kills
@@ -613,129 +532,129 @@ system_server 通过该接口回调应用进程，驱动生命周期和事务执
 # Check LMKD statistics
 ```
 
-## Cross-References
+## 交叉参考
 
 本章与 Intent 系统、system_server、Window 系统、Input 系统、SurfaceFlinger、Animation 与进程管理章节强相关。
 
 ---
 
-## 22.23 高级主题：Transition 系统
+## 22.22 高级主题：Transition 系统
 
-### 22.23.1 Shell Transitions（Android 13+）
+### 22.22.1 Shell Transitions（Android 13+）
 
 现代 activity / task 切换越来越依赖 Shell transition 统一组织窗口变化与动画控制。
 
-### 22.23.2 `TransitionInfo`
+### 22.22.2 `TransitionInfo`
 
 TransitionInfo 描述过渡中涉及的容器变化、模式、bounds 和表面信息。
 
-### 22.23.3 过渡类型
+### 22.22.3 过渡类型
 
 包括 open、close、change、to-front、to-back、rotation 等。
 
-### 22.23.4 动画控制器
+### 22.22.4 动画控制器
 
 Shell 与 WMS 通过动画控制器把 transition 描述转为实际 surface 动画。
 
 ---
 
-## 22.24 高级主题：Activity Client Controller
+## 22.23 高级主题：Activity Client Controller
 
-### 22.24.1 `IActivityClientController` 接口
+### 22.23.1 `IActivityClientController` 接口
 
 该接口承载 system_server 对客户端 activity 某些控制能力和回调链路。
 
-### 22.24.2 回调流
+### 22.23.2 回调流
 
 系统通过 controller 和 `IApplicationThread` 一起协调客户端可见活动行为。
 
 ---
 
-## 22.25 高级主题：`ActivityTaskSupervisor`
+## 22.24 高级主题：`ActivityTaskSupervisor`
 
-### 22.25.1 角色与职责
+### 22.24.1 角色与职责
 
 ATS 负责监督 Activity/Task 启动、切换、idle 状态、超时和部分恢复逻辑。
 
-### 22.25.2 Idle 队列
+### 22.24.2 Idle 队列
 
 Idle queue 用于在活动进入空闲后继续推进等待中的工作，例如启动后续 activity。
 
-### 22.25.3 Handler
+### 22.24.3 Handler
 
 Supervisor 自身拥有用于超时和异步状态推进的 Handler。
 
 ---
 
-## 22.26 高级主题：`ActivityStartController`
+## 22.25 高级主题：`ActivityStartController`
 
-### 22.26.1 Factory 与池模式
+### 22.25.1 Factory 与池模式
 
 启动控制器通常复用 `ActivityStarter` 实例池，减少频繁分配开销。
 
-### 22.26.2 Builder 模式用法
+### 22.25.2 Builder 模式用法
 
 Builder 风格有助于把复杂启动参数组织得更可读和可扩展。
 
 ---
 
-## 22.27 高级主题：`DisplayContent` 内部
+## 22.26 高级主题：`DisplayContent` 内部
 
-### 22.27.1 DisplayContent 结构
+### 22.26.1 DisplayContent 结构
 
 DisplayContent 是单显示设备上的窗口与 task 根节点。
 
-### 22.27.2 关键字段
+### 22.26.2 关键字段
 
 包含 display id、配置、旋转、显示区域、焦点窗口和策略引用。
 
-### 22.27.3 多显示支持
+### 22.26.3 多显示支持
 
 Android 的多显示支持建立在多个 DisplayContent 并存与任务/窗口跨显示迁移能力之上。
 
 ---
 
-## 22.28 高级主题：输入分发连接
+## 22.27 高级主题：输入分发连接
 
-### 22.28.1 Input Channels
+### 22.27.1 Input Channels
 
 每个窗口与输入系统之间通过 InputChannel 建立连接，用于事件传输与 ANR 监控。
 
-### 22.28.2 输入焦点与窗口排序
+### 22.27.2 输入焦点与窗口排序
 
 输入焦点依赖于窗口排序、可见性、可交互性和 policy 决策。
 
-### 22.28.3 Spy Windows 与输入特性
+### 22.27.3 Spy Windows 与输入特性
 
 特殊窗口可监听输入流或具备额外输入行为特征，需要 WMS 与 InputDispatcher 协同处理。
 
 ---
 
-## 22.29 Activity/Window 系统中的设计模式
+## 22.28 Activity/Window 系统中的设计模式
 
-### 22.29.1 容器树模式
+### 22.28.1 容器树模式
 
 WindowContainer 树是整个系统的基础设计模式。
 
-### 22.29.2 Pool/Recycler 模式
+### 22.28.2 Pool/Recycler 模式
 
 如 ActivityStarter 池等对象复用模式，降低频繁分配开销。
 
-### 22.29.3 两阶段提交模式
+### 22.28.3 两阶段提交模式
 
 许多窗口与生命周期更新会先修改状态，再统一执行布局或事务提交。
 
-### 22.29.4 延迟执行模式
+### 22.28.4 延迟执行模式
 
 系统常通过 handler、defer resume、defer surface placement 等方式延后复杂操作。
 
-### 22.29.5 Token 模式
+### 22.28.5 Token 模式
 
 Activity token、window token、app token 等令牌模式是安全和身份建模核心。
 
 ---
 
-## 22.30 关键术语表
+## 22.29 关键术语表
 
 | 术语 | 说明 |
 |------|------|
@@ -751,25 +670,25 @@ Activity token、window token、app token 等令牌模式是安全和身份建�
 
 ---
 
-## 22.31 源码导航指南
+## 22.30 源码导航指南
 
-### 22.31.1 `am` 包
+### 22.30.1 `am` 包
 
 进程、广播、服务和 OOM 管理相关源码主要位于 `am` 包。
 
-### 22.31.2 `wm` 包（Activity/Window）
+### 22.30.2 `wm` 包（Activity/Window）
 
 Task、ActivityRecord、WMS、DisplayContent 和过渡系统主要位于 `wm` 包。
 
-### 22.31.3 客户端代码
+### 22.30.3 客户端代码
 
 应用侧 Activity、Instrumentation、ActivityThread 和 View/Window 客户端代码位于 `android.app`、`android.view` 等包。
 
-### 22.31.4 关键 AIDL 文件
+### 22.30.4 关键 AIDL 文件
 
 `IActivityManager.aidl`、`IActivityTaskManager.aidl`、`IWindowManager.aidl`、`IApplicationThread.aidl` 等是核心跨进程契约。
 
-### 22.31.5 面向新贡献者的阅读顺序
+### 22.30.5 面向新贡献者的阅读顺序
 
 建议按以下顺序：
 
@@ -781,43 +700,107 @@ Task、ActivityRecord、WMS、DisplayContent 和过渡系统主要位于 `wm` �
 
 ---
 
-## 22.32 常见问题
+## 22.31 常见问题
 
-### Q: 为什么 AMS 和 ATMS 要拆分成两个服务？
+### 问：为什么 AMS 和 ATMS 要拆分成两个服务？
 
 因为进程/服务/广播管理与窗口/任务/多显示管理的复杂度都很高，拆分后职责更清晰，演进空间更大。
 
-### Q: 为什么 ATMS 位于 `wm` 包而不是 `am`？
+### 问：为什么 ATMS 位于 `wm` 包而不是 `am`？
 
 因为它与窗口容器树、Task、DisplayContent 和 WMS 的耦合更强。
 
-### Q: 系统如何决定创建新 Task 还是复用旧 Task？
+### 问：系统如何决定创建新 Task 还是复用旧 Task？
 
 取决于 intent flags、launchMode、task affinity、现有容器结构和当前窗口模式。
 
-### Q: 如果 Activity 不响应 `onPause()` 会怎样？
+### 问：如果 Activity 不响应 `onPause()` 会怎样？
 
 系统会等待一定时间，必要时触发 timeout/ANR 或推进恢复逻辑，避免整个启动流程长时间卡死。
 
-### Q: 系统如何决定在内存压力下杀死哪个进程？
+### 问：系统如何决定在内存压力下杀死哪个进程？
 
 AMS 依据 OOM adj、进程状态、可见性和 LRU 列表与 LMKD 协同作出决策。
 
-### Q: 两个不同应用的 Activity 可以在同一个 Task 中吗？
+### 问：两个不同应用的 Activity 可以在同一个 Task 中吗？
 
 可以，在某些共享 task affinity 或 document/task 重用场景下可能发生。
 
-### Q: 一个 Task 中 Activity 数量有上限吗？
+### 问：一个 Task 中 Activity 数量有上限吗？
 
 没有固定小常量上限，但系统会受内存、recent task 策略和用户行为约束。
 
-### Q: `ActivityRecord` 与 `WindowState` 的关系是什么？
+### 问：`ActivityRecord` 与 `WindowState` 的关系是什么？
 
 `ActivityRecord` 表示 Activity 生命周期与容器身份，`WindowState` 表示该 Activity 拥有的具体窗口实例；二者在容器树和可见性上紧密关联。
 
-## Summary
+## 22.32 动手实践：追踪与调试
 
-## 总结
+练习 1：用 Perfetto 追踪 Activity 启动
+
+```bash
+# 在设备上启动 trace，捕获相关 category
+# 在另一个终端中启动一个 activity
+# 在 https://ui.perfetto.dev/ 中打开
+```
+
+### 22.32.1 练习 2：用 `dumpsys` 检查窗口层级
+
+```bash
+# 完整导出 window 状态
+# 仅导出更简洁的 hierarchy
+# 导出 activity 视角状态
+# 导出指定 package 的详细信息
+```
+
+### 22.32.2 练习 3：监控 Activity 生命周期事件
+
+```bash
+# 监控 ActivityManager 事件
+# 或使用更详细的 WM tag
+```
+
+### 22.32.3 练习 4：检查进程优先级
+
+```bash
+# 查看所有进程及其 OOM adj
+# 或从 procfs 读取原始值
+```
+
+### 22.32.4 练习 5：强制配置变更
+
+```bash
+# 旋转屏幕
+# 观察日志
+```
+
+### 22.32.5 练习 6：用 `am` 命令检查 Task 状态
+
+```bash
+# 列出所有 task
+# 获取 task 详情
+# 在指定 task 中启动 activity
+# 将 task 移到前台
+# 移除 task
+```
+
+### 22.32.6 练习 7：使用 `wm` 命令做窗口检查
+
+```bash
+# 获取 display 信息
+# 覆盖 display size，适用于测试
+# 重置覆盖项
+# 获取 SurfaceFlinger 状态
+```
+
+### 22.32.7 面向 Framework 开发者的调试提示
+
+优先结合 `dumpsys activity`、`dumpsys window`、Perfetto、WMS 日志和 AMS/ATMS 源码共同定位问题。
+
+---
+
+## 小结
+
 
 Android Activity 与 Window 管理系统的关键架构要点如下：
 

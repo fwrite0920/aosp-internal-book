@@ -1226,7 +1226,7 @@ sequenceDiagram
 
 ---
 
-## 35.15 动手实践（Try It）：网络调试
+## 35.15 动手实践：网络调试
 
 ### 35.15.1 `dumpsys connectivity`
 
@@ -1407,7 +1407,7 @@ cm.requestNetwork(request, new ConnectivityManager.NetworkCallback() {
 
 ---
 
-## Summary
+## 小结
 
 - Android 网络栈以 `ConnectivityService` 为中心，把 Wi-Fi、蜂窝、VPN、Thread、VCN 等不同承载统一成 `NetworkAgent` 模型。
 - `netId`、`fwmark`、策略路由和 UID 级控制是 Android 区别于传统桌面系统网络栈的关键设计。

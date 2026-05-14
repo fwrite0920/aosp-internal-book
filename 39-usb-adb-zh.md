@@ -954,7 +954,7 @@ adb logcat -s MtpServer:V MtpDatabase:V MtpService:V
 
 ---
 
-## Summary
+## 小结
 
 - Android USB 栈同时覆盖 gadget、host、Type-C 端口、ADB、MTP 和 Accessory，多数看似无关的功能都汇聚到 `UsbService` 及其子管理器中。
 - `UsbDeviceManager` 是 gadget 模式的核心状态机，负责 function 切换、锁屏协作、广播、超时和 HAL / sysfs 配置。

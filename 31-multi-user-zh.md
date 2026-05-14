@@ -808,6 +808,8 @@ DevicePolicyManager dpm = context.getSystemService(DevicePolicyManager.class);
 // 真实创建通常走托管配置或 DPC 流程，而不是普通三方 app 直接调用
 ```
 
+#### 配置开通流程
+
 背后会触发：
 
 - 用户类型与数量校验
@@ -818,12 +820,25 @@ DevicePolicyManager dpm = context.getSystemService(DevicePolicyManager.class);
 
 ### 31.4.8 生命周期管理
 
+#### 资料状态
+
 工作资料的生命周期高度依赖父用户：
 
 - 父用户启动时，若 `startWithParent=true`，资料会随之启动
 - 父用户切后台后，profile 的前后台语义也跟着变化
 - 父用户被删除时，资料会被连带删除
+
+#### 安静模式（暂停 / 恢复）
+
 - Quiet Mode 为资料提供“逻辑暂停”能力
+
+#### 安静模式标志
+
+Quiet Mode 的状态通过用户标记、系统设置和 profile 可用性共同体现，影响启动、通知和跨资料入口。
+
+#### 资料移除级联
+
+当父用户或工作资料被移除时，系统会级联清理 profile 关系、安装状态、存储、策略和跨资料规则。
 
 ### 31.4.9 `CrossProfileApps` API
 
@@ -835,6 +850,14 @@ CrossProfileApps crossProfileApps =
 ```
 
 它的定位不是替代 intent filter，而是让受控跨资料启动有标准 API，而不是靠私有约定乱穿。
+
+#### 跨资料 Intent Filter 机制
+
+跨资料 intent filter 需要同时检查调用方、目标用户、profile group 和 DPM 策略。
+
+#### 默认 Cross-Profile Intent
+
+系统会为分享、打开方式和部分受信任操作提供默认跨资料规则。
 
 ### 31.4.10 企业策略整合
 
@@ -856,13 +879,31 @@ graph TB
     PO --> WP
 ```
 
+#### 资料作用域限制
+
 策略层级大致分为：
 
 - 设备级：Wi-Fi、VPN、证书、全局限制
 - 资料级：工作应用、密码、分享限制、剪贴板策略
 - 继承型：某些 profile 可从父用户继承设备策略
 
+#### 凭据共享
+
+企业资料可以在受控条件下与父用户共享凭据或认证状态，但必须由 DPM 策略明确授权。
+
 ### 31.4.11 工作资料 UI 集成
+
+#### Launcher 工作标签页
+
+Launcher 的工作分页让个人应用和工作应用在入口上可见分离。
+
+#### SystemUI 集成
+
+SystemUI 负责在通知、快捷设置和状态提示中呈现工作资料状态。
+
+#### 联系人集成
+
+联系人、分享和拨号等入口需要在个人资料与工作资料之间执行受控展示。
 
 工作资料是否“好用”，很大程度上取决于 UI 集成而不是底层数据结构。SystemUI、Launcher、Settings、Chooser、通知系统都需要识别 profile 语义，确保：
 
@@ -1265,9 +1306,9 @@ graph LR
 
 ---
 
-## 附录：内部机制深入剖析
+## 31.8 Deep Dive into Internal Mechanisms
 
-### A.1 `UserInfo.flags`
+### 31.8.1 `UserInfo.flags`
 
 `UserInfo.flags` 是多用户语义最密集的字段之一。它把“角色属性”和“状态属性”压成 bitmask，例如：
 
@@ -1280,7 +1321,7 @@ public static final int FLAG_RESTRICTED = 0x00000008;
 
 阅读 `pm list users` 或 `dumpsys user` 时，先学会拆 flags，很多问题会立刻清晰。
 
-### A.2 用户限制的更深一层
+### 31.8.2 用户限制的更深一层
 
 用户限制并不是只在 UMS 生效。真正的 enforcement 分散在各个服务：
 
@@ -1290,7 +1331,7 @@ public static final int FLAG_RESTRICTED = 0x00000008;
 
 UMS 负责聚合与缓存，执行点散布在整个框架层。
 
-### A.3 `UserSystemPackageInstaller`
+### 31.8.3 `UserSystemPackageInstaller`
 
 这个组件决定“系统镜像上的包，哪些应该给这个用户”。它综合：
 
@@ -1301,11 +1342,11 @@ UMS 负责聚合与缓存，执行点散布在整个框架层。
 
 多用户系统真正做到“同镜像、不同用户看到不同系统应用”，靠的就是它。
 
-### A.4 UserFilter 系统
+### 31.8.4 UserFilter 系统
 
 Android 内部不少查询接口都支持“按用户过滤”。UserFilter 的作用，就是把“全部用户 / 当前用户 / 可见用户 / 同 group 用户”这类集合语义标准化，避免每个服务自己造轮子。
 
-### A.5 跨资料 Intent Filter 机制
+### 31.8.5 跨资料 Intent Filter 机制
 
 跨资料 intent filter 不只是 resolver 层做个简单 pass-through。它需要同时考虑：
 
@@ -1315,27 +1356,27 @@ Android 内部不少查询接口都支持“按用户过滤”。UserFilter 的�
 - DPM 策略
 - 分享 / 打开 / 选择器等场景的 UI 展示方式
 
-### A.6 用户生命周期广播细节
+### 31.8.6 用户生命周期广播细节
 
 多用户广播常见的误解是“`BOOT_COMPLETED` 就等于系统启动完成”。实际不是。每个用户都会有自己的 locked boot、unlock、boot completed 节点；对 profile 来说，这些节点还会受父用户和 quiet mode 影响。
 
-### A.7 HSUM
+### 31.8.7 HSUM
 
 Headless System User Mode 常见于车机。系统用户继续承担大量 system-only 工作，但真正的人类会话跑在别的 full user 上。这样能把“系统服务宿主”与“驾驶员 / 乘客会话”解耦。
 
-### A.8 多显示多用户
+### 31.8.8 多显示多用户
 
 MUMD 模式下，“当前用户”已经不够表达真实状态，需要加入 display 维度。一个用户在哪块屏上可见，决定了哪些窗口、哪些进程和哪些输入路由是激活的。
 
-### A.9 `UserData` 持久化格式
+### 31.8.9 `UserData` 持久化格式
 
 `userlist.xml` 是全局入口，`<id>.xml` 保存单个用户详细属性，`res_*.xml` 之类文件则承载限制或衍生状态。分析用户问题时，这些文件是第一现场。
 
-### A.10 用户版本迁移
+### 31.8.10 用户版本迁移
 
 UMS 会维护用户元数据的 schema 版本。系统升级时，如果用户 XML 结构或语义变化，需要做迁移，以保证旧设备升级后不会因为解析失败或字段缺失导致多用户状态损坏。
 
-### A.11 Profile 关联与解析
+### 31.8.11 Profile 关联与解析
 
 很多“这个用户是不是另一个用户的 profile”问题，最终都要落回：
 
@@ -1345,23 +1386,23 @@ UMS 会维护用户元数据的 schema 版本。系统升级时，如果用户 X
 
 这三者组合起来，决定了 profile 的身份关系。
 
-### A.12 Guest 重置
+### 31.8.12 Guest 重置
 
 Guest 的“重置”通常不是逻辑清空，而是直接删除并重建，或者依赖 ephemeral 语义在退出时清除数据。这样实现简单，也更接近真正的隔离。
 
-### A.13 User Journey Logging
+### 31.8.13 User Journey Logging
 
 现代 Android 会记录用户旅程，如创建、启动、切换、解锁、停止等时间点，用于性能分析和问题追踪。`startRealtime`、`unlockRealtime` 一类字段就是这类观测的一部分。
 
-### A.14 Communal Profile
+### 31.8.14 Communal Profile
 
 Communal Profile 面向共享空间场景，例如家庭中控或公共设备。它强调“多人共用一个受限空间”，和个人 full user、企业 profile 都不是一回事。
 
-### A.15 Supervising Profile
+### 31.8.15 Supervising Profile
 
 Supervising / supervised 场景面向家长控制、受监管环境或特定区域控制需求。它通常需要更强的策略约束和更高优先级的系统信任链。
 
-### A.16 多用户对系统服务的影响
+### 31.8.16 多用户对系统服务的影响
 
 几乎所有系统服务都要做 user-aware 设计：
 
@@ -1371,7 +1412,7 @@ Supervising / supervised 场景面向家长控制、受监管环境或特定区�
 
 谁没把 user 维度想明白，谁就很容易写出跨用户泄漏。
 
-### A.17 最大用户数限制
+### 31.8.17 最大用户数限制
 
 理论上受 `PER_USER_RANGE` 与 `MAX_USER_ID` 影响，实践中更早受限于：
 
@@ -1380,7 +1421,7 @@ Supervising / supervised 场景面向家长控制、受监管环境或特定区�
 - 并发进程数
 - 用户切换和启动时延
 
-### A.18 SystemUI 中的 UserSwitcherController
+### 31.8.18 SystemUI 中的 UserSwitcherController
 
 这个控制器不是简单读个用户列表，而是要处理：
 
@@ -1389,7 +1430,7 @@ Supervising / supervised 场景面向家长控制、受监管环境或特定区�
 - guest / add user / restricted user 的特殊入口
 - 广播驱动的状态同步
 
-### A.19 安全模型总结
+### 31.8.19 安全模型总结
 
 多用户安全模型的核心不是“切换桌面”，而是：
 
@@ -1400,11 +1441,11 @@ Supervising / supervised 场景面向家长控制、受监管环境或特定区�
 
 这是 Android 用户数据安全边界的重要组成部分。
 
-### A.20 多用户对 ContentProvider 的影响
+### 31.8.20 多用户对 ContentProvider 的影响
 
 Provider 查询必须明确 user context。`content://` 本身不显式编码 userId，但系统在解析、调度和授权时会引入 user 维度；否则同一个 provider authority 就可能跨用户串数据。
 
-### A.21 按用户设置
+### 31.8.21 按用户设置
 
 大量系统设置保存在 per-user 空间中，这解释了为什么：
 
@@ -1412,15 +1453,15 @@ Provider 查询必须明确 user context。`content://` 本身不显式编码 us
 - 某些设置能跨用户共享，另一些不能
 - 修复设置异常时必须先确认你看的到底是哪一个 user
 
-### A.22 多用户通知处理
+### 31.8.22 多用户通知处理
 
 通知天然带 userId 语义。SystemUI 展示哪条通知、NMS 投递给谁、工作资料通知是否折叠或分栏，全部要结合用户边界来处理。
 
-### A.23 多用户与设备管理
+### 31.8.23 多用户与设备管理
 
 Device Owner、Profile Owner、受监管用户之间的组合，是 Android 企业与家长控制体系的基础。多用户不是这些能力的附属品，而是它们的承载容器。
 
-### A.24 多用户与应用权限
+### 31.8.24 多用户与应用权限
 
 运行时权限是 per-user 的：
 
@@ -1431,11 +1472,11 @@ User 10: com.example.app 未授权 Camera
 
 这点非常重要。即使 APK 只有一份，授权状态也不会自动跨用户复制。
 
-### A.25 多用户与安装器
+### 31.8.25 多用户与安装器
 
 创建用户时，PMS 需要决定哪些包要“对这个用户安装可见”。对 profile 而言，还会叠加父用户关系与 user type 策略。这正是“安装状态 per-user、包文件可共享”的经典 Android 模型。
 
-### A.26 多用户与进程管理
+### 31.8.26 多用户与进程管理
 
 进程优先级也带 user 感知：
 
@@ -1462,7 +1503,7 @@ graph TB
 - 后台 full user 进程更容易先被杀
 - profile 往往继承父用户会话优先级
 
-### A.27 多用户启动序列
+### 31.8.27 多用户启动序列
 
 开机后的多用户序列大致是：
 
@@ -1484,7 +1525,7 @@ sequenceDiagram
     end
 ```
 
-### A.28 多用户与 Keystore
+### 31.8.28 多用户与 Keystore
 
 Keystore 同样是按用户隔离的：
 
@@ -1494,7 +1535,7 @@ Keystore 同样是按用户隔离的：
 
 这对证书、密码、企业证书管理和生物认证都至关重要。
 
-### A.29 多用户测试策略
+### 31.8.29 多用户测试策略
 
 多用户测试不能只停留在 UI 点点点，至少要覆盖：
 
@@ -1519,7 +1560,7 @@ adb shell am instrument -w -e class \
 adb shell pm list users
 ```
 
-### A.30 已知限制与边界情况
+### 31.8.30 已知限制与边界情况
 
 多用户体系的几个现实约束：
 
@@ -1531,9 +1572,9 @@ adb shell pm list users
 
 ---
 
-## 31.8 动手实践
+## 31.9 动手实践
 
-### 31.8.1 列出用户
+### 31.9.1 列出用户
 
 ```bash
 # 列出所有用户
@@ -1563,7 +1604,7 @@ Users:
     profileGroupId: 0
 ```
 
-### 31.8.2 创建用户
+### 31.9.2 创建用户
 
 ```bash
 # 创建次级用户
@@ -1582,7 +1623,7 @@ adb shell cmd user create-profile-for --user-type android.os.usertype.profile.PR
 adb shell cmd user list-user-types
 ```
 
-### 31.8.3 切换用户
+### 31.9.3 切换用户
 
 ```bash
 # 切换到 user 10
@@ -1595,7 +1636,7 @@ adb shell am get-current-user
 adb shell cmd user report-user-switchability
 ```
 
-### 31.8.4 管理资料
+### 31.9.4 管理资料
 
 ```bash
 # 打开 Quiet Mode
@@ -1611,7 +1652,7 @@ adb shell cmd user is-profile 11
 adb shell cmd user get-profile-parent 11
 ```
 
-### 31.8.5 用户限制
+### 31.9.5 用户限制
 
 ```bash
 # 给 user 10 增加限制
@@ -1637,7 +1678,7 @@ adb shell dumpsys user | grep -A 20 "UserInfo{10"
 | `no_remove_user` | 不允许删除用户 |
 | `no_user_switch` | 不允许切走该用户 |
 
-### 31.8.6 检查存储布局
+### 31.9.6 检查存储布局
 
 ```bash
 # 查看每用户数据目录
@@ -1656,7 +1697,7 @@ adb shell ls /data/system/users/
 adb shell cat /data/system/users/10.xml
 ```
 
-### 31.8.7 删除用户
+### 31.9.7 删除用户
 
 ```bash
 # 删除 user 10
@@ -1666,7 +1707,7 @@ adb shell pm remove-user 10
 adb shell pm remove-user --set-ephemeral-if-in-use 10
 ```
 
-### 31.8.8 观察用户事件
+### 31.9.8 观察用户事件
 
 ```bash
 # 观察 ActivityManager 中的用户日志
@@ -1679,7 +1720,7 @@ adb logcat -s UserManagerService
 adb logcat | grep -E "onUserStart|onUserStop|switchUser|UserState"
 ```
 
-### 31.8.9 检查用户可见性
+### 31.9.9 检查用户可见性
 
 ```bash
 # 当前可见用户
@@ -1692,7 +1733,7 @@ adb shell cmd user is-visible 10
 adb shell cmd user get-main-display-for-user 10
 ```
 
-### 31.8.10 Private Space 操作
+### 31.9.10 Private Space 操作
 
 ```bash
 # 创建 Private Space
@@ -1709,7 +1750,7 @@ adb shell cmd user set-quiet-mode --disable <private_user_id>
 adb shell getprop persist.sys.user.private_profile
 ```
 
-### 31.8.11 HSUM 测试
+### 31.9.11 HSUM 测试
 
 ```bash
 # 检查是否为 headless system user 模式
@@ -1723,7 +1764,7 @@ adb reboot
 adb shell getprop persist.user.hsum_boot_strategy
 ```
 
-### 31.8.12 检查用户类型
+### 31.9.12 检查用户类型
 
 ```bash
 # 查看所有注册类型
@@ -1736,7 +1777,7 @@ adb shell cmd user get-user-type 11
 adb shell dumpsys user | grep -A 30 "User properties"
 ```
 
-### 31.8.13 性能观测
+### 31.9.13 性能观测
 
 ```bash
 # 测量用户创建时间
@@ -1749,7 +1790,7 @@ adb logcat -s SystemServerTiming | grep -i user
 adb shell dumpsys user | grep -E "startRealtime|unlockRealtime"
 ```
 
-### 31.8.14 多用户排障清单
+### 31.9.14 多用户排障清单
 
 排查多用户问题时，建议按这个顺序看：
 
@@ -1799,7 +1840,7 @@ adb shell dumpsys package intent-filter-verifiers
 
 ---
 
-## 总结（Summary）
+## 小结
 
 Android 多用户不是一个孤立特性，而是一条从 Linux UID、文件加密、PackageManager、ActivityManager 一直贯穿到 SystemUI 的系统边界。
 
@@ -1813,7 +1854,7 @@ Android 多用户不是一个孤立特性，而是一条从 Linux UID、文件�
 6. HSUM、MUMD、Private Space 说明 Android 的多用户模型已经从手机扩展到车机、企业和个人隐私多种产品形态。
 7. 调试多用户问题时，优先检查 user type、运行态、profile group、存储目录和 per-user package / permission 状态。
 
-### 关键源码文件参考
+Key Source Files Reference:
 
 | 文件 | 作用 |
 |---|---|

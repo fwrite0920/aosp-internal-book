@@ -1,39 +1,8 @@
 # 第 24 章：显示系统
 
-## 概述
-
 Android 显示系统横跨三个主要进程，即 `system_server`、`surfaceflinger` 和客户端应用，同时也跨越两种语言边界，即框架侧的 Java 与原生合成器侧的 C++。它的职责覆盖从发现物理面板、按照精确的 VSYNC 节奏调度帧刷新，到把数百个图形图层合成为一张最终输出图像的全过程。本章将依次分析各个关键子系统：负责显示生命周期的 Java 侧 `DisplayManagerService`；组织窗口 Z 轴次序的 `DisplayArea` 层级；从硬件中断一直通到 `Choreographer` 的 VSYNC 管线；屏幕旋转与折叠屏显示管理；刘海与圆角处理；SurfaceFlinger 前端重构与 `CompositionEngine`；通过 `BLASTBufferQueue` 实现的缓冲区管理；虚拟显示与镜像；色彩管理；以及显示电源控制。
 
 已经学习过第 9 章图形渲染管线和第 14 章 system_server 架构的读者，会发现本章是在这些基础之上，进一步进入显示子系统这一更具体的领域。
-
-**本章关键源码文件：**
-
-| 文件 | 说明 |
-|------|------|
-| `frameworks/base/services/core/java/com/android/server/display/DisplayManagerService.java` | 显示生命周期、适配器管理（6601 行） |
-| `frameworks/base/services/core/java/com/android/server/display/LogicalDisplay.java` | 逻辑显示到物理显示的映射（1314 行） |
-| `frameworks/base/services/core/java/com/android/server/display/DisplayDevice.java` | 物理显示抽象 |
-| `frameworks/base/services/core/java/com/android/server/display/LogicalDisplayMapper.java` | 折叠屏显示切换 |
-| `frameworks/base/services/core/java/com/android/server/display/DisplayPowerController.java` | 显示电源状态机（3507 行） |
-| `frameworks/base/services/core/java/com/android/server/wm/DisplayArea.java` | DisplayArea 容器（882 行） |
-| `frameworks/base/services/core/java/com/android/server/wm/DisplayAreaPolicyBuilder.java` | 层级构建（1052 行） |
-| `frameworks/base/services/core/java/com/android/server/wm/DisplayRotation.java` | 旋转策略（2255 行） |
-| `frameworks/base/services/core/java/com/android/server/wm/SeamlessRotator.java` | 零闪烁旋转变换 |
-| `frameworks/base/services/core/java/com/android/server/wm/AsyncRotationController.java` | 非 Activity 窗口异步旋转 |
-| `frameworks/native/services/surfaceflinger/Scheduler/Scheduler.h` | SurfaceFlinger 帧调度器 |
-| `frameworks/native/services/surfaceflinger/Scheduler/RefreshRateSelector.h` | 刷新率选择策略 |
-| `frameworks/native/services/surfaceflinger/Scheduler/VSyncPredictor.h` | VSYNC 时序模型 |
-| `frameworks/native/services/surfaceflinger/Scheduler/EventThread.h` | VSYNC 事件分发 |
-| `frameworks/native/services/surfaceflinger/FrontEnd/LayerLifecycleManager.h` | 前端图层生命周期 |
-| `frameworks/native/services/surfaceflinger/FrontEnd/LayerSnapshotBuilder.h` | 用于合成的快照构建 |
-| `frameworks/native/services/surfaceflinger/CompositionEngine/include/compositionengine/CompositionEngine.h` | 合成编排 |
-| `frameworks/native/libs/gui/include/gui/BLASTBufferQueue.h` | BLAST 缓冲投递 |
-| `frameworks/base/core/java/android/view/DisplayCutout.java` | 刘海区域几何模型 |
-| `frameworks/base/services/core/java/com/android/server/display/color/ColorDisplayService.java` | 色彩变换管线 |
-| `frameworks/base/services/core/java/com/android/server/display/color/DisplayTransformManager.java` | SurfaceFlinger 色彩矩阵下发 |
-| `frameworks/base/services/core/java/com/android/server/devicestate/DeviceStateManagerService.java` | 折叠设备状态机 |
-
----
 
 ## 24.1 显示系统架构
 
@@ -2476,102 +2445,7 @@ private int mLeadDisplayId = Layout.NO_LEAD_DISPLAY;
 
 ---
 
-## 24.12 详细参考
-
-本章已经覆盖了 Android 显示管线中的主要子系统，从框架层的 `DisplayManagerService` 一直到原生层的 SurfaceFlinger 合成器与缓冲区管理。对于希望继续深挖的读者，配套报告提供了对本章各主题更细粒度、更穷尽的分析：
-
-### 配套报告系列
-
-AOSP Window and Display System Architecture Report 分为三部分，总计超过 100 个章节小节：
-
-**Part 1：基础、架构与渲染管线（Sections 1-45）**
-
-- WindowManagerService 架构与线程模型
-- WindowContainer 层级与 Z 轴顺序
-- Shell Transitions 与动画系统
-- SurfaceFlinger 渲染管线
-- Window insets 与系统栏
-
-**Part 2：窗口特性与子系统（Sections 46-75）**
-
-- Section 51：BufferQueue 与 BLASTBufferQueue 架构，包括 slot 状态机、三缓冲和 BLAST 的 transaction 投递模式
-- Section 52：缓冲区共享架构与生命周期，包括 Gralloc HAL、fence 同步和跨进程共享
-- Section 53：虚拟显示合成管线，包括 VirtualDisplaySurface、三路 BufferQueue 路由和 SinkSurfaceHelper
-- Section 55：显示刷新架构，包括 VSYNC 管线、Choreographer、RefreshRateSelector、frame timeline 以及与 Linux DRM/KMS 的对比
-- Section 56：屏幕旋转与方向管理，包括 DisplayRotation、SeamlessRotator、AsyncRotationController 和 FixedRotationTransformState
-- Section 57：折叠屏显示支持，包括 DeviceStateManagerService、FoldableDeviceStateProvider 和 LogicalDisplayMapper 的显示切换
-- Section 62：显示色彩管理，包括 ColorDisplayService、night display、white balance、saturation、daltonizer 以及 SurfaceFlinger 色彩管线
-
-**Part 3：系统集成与平台变体（Sections 76-100）**
-
-- Section 77：电源管理与窗口系统，包括 AWAKE 到 ASLEEP 状态、DreamManagerService、AOD、DisplayPowerController 和 sleep token
-- Section 88：Display Cutout 与 Rounded Corners，包括 DisplayCutout、CutoutSpecification、WmDisplayCutout、cutout 模式、RoundedCorners 和 DisplayShape
-- Section 89：SurfaceFlinger 前端重构与合成，包括 LayerLifecycleManager、LayerSnapshotBuilder 和 CompositionEngine
-- Section 93：显示镜像与投屏，包括 mirror layer、MediaProjection、ContentRecorder、MediaRouter 和 WifiDisplayAdapter
-
-### 快速参考：关键源码路径
-
-| 组件 | 路径 |
-|------|------|
-| DisplayManagerService | `frameworks/base/services/core/java/com/android/server/display/DisplayManagerService.java` |
-| LogicalDisplay | `frameworks/base/services/core/java/com/android/server/display/LogicalDisplay.java` |
-| LogicalDisplayMapper | `frameworks/base/services/core/java/com/android/server/display/LogicalDisplayMapper.java` |
-| DisplayPowerController | `frameworks/base/services/core/java/com/android/server/display/DisplayPowerController.java` |
-| ColorDisplayService | `frameworks/base/services/core/java/com/android/server/display/color/ColorDisplayService.java` |
-| DisplayTransformManager | `frameworks/base/services/core/java/com/android/server/display/color/DisplayTransformManager.java` |
-| VirtualDisplayAdapter | `frameworks/base/services/core/java/com/android/server/display/VirtualDisplayAdapter.java` |
-| DeviceStateManagerService | `frameworks/base/services/core/java/com/android/server/devicestate/DeviceStateManagerService.java` |
-| DisplayArea | `frameworks/base/services/core/java/com/android/server/wm/DisplayArea.java` |
-| DisplayAreaPolicyBuilder | `frameworks/base/services/core/java/com/android/server/wm/DisplayAreaPolicyBuilder.java` |
-| DisplayAreaPolicy | `frameworks/base/services/core/java/com/android/server/wm/DisplayAreaPolicy.java` |
-| DisplayRotation | `frameworks/base/services/core/java/com/android/server/wm/DisplayRotation.java` |
-| SeamlessRotator | `frameworks/base/services/core/java/com/android/server/wm/SeamlessRotator.java` |
-| AsyncRotationController | `frameworks/base/services/core/java/com/android/server/wm/AsyncRotationController.java` |
-| DisplayCutout | `frameworks/base/core/java/android/view/DisplayCutout.java` |
-| CutoutSpecification | `frameworks/base/core/java/android/view/CutoutSpecification.java` |
-| Scheduler | `frameworks/native/services/surfaceflinger/Scheduler/Scheduler.h` |
-| RefreshRateSelector | `frameworks/native/services/surfaceflinger/Scheduler/RefreshRateSelector.h` |
-| VSyncPredictor | `frameworks/native/services/surfaceflinger/Scheduler/VSyncPredictor.h` |
-| VSyncDispatchTimerQueue | `frameworks/native/services/surfaceflinger/Scheduler/VSyncDispatchTimerQueue.h` |
-| EventThread | `frameworks/native/services/surfaceflinger/Scheduler/EventThread.h` |
-| LayerLifecycleManager | `frameworks/native/services/surfaceflinger/FrontEnd/LayerLifecycleManager.h` |
-| LayerSnapshotBuilder | `frameworks/native/services/surfaceflinger/FrontEnd/LayerSnapshotBuilder.h` |
-| CompositionEngine | `frameworks/native/services/surfaceflinger/CompositionEngine/include/compositionengine/CompositionEngine.h` |
-| BLASTBufferQueue | `frameworks/native/libs/gui/include/gui/BLASTBufferQueue.h` |
-
-### 调试命令
-
-| 命令 | 用途 |
-|------|------|
-| `dumpsys display` | 查看 DisplayManagerService 状态 |
-| `dumpsys SurfaceFlinger` | 查看 SurfaceFlinger 图层树与合成统计 |
-| `dumpsys SurfaceFlinger --frametimeline` | 查看帧时序数据 |
-| `dumpsys SurfaceFlinger --list` | 列出所有图层 |
-| `dumpsys window displays` | 查看 WindowManagerService 的显示信息 |
-| `dumpsys window display-areas` | 查看 DisplayArea 层级 |
-| `dumpsys color_display` | 查看 ColorDisplayService 状态 |
-| `dumpsys device_state` | 查看 DeviceStateManagerService 状态 |
-| `cmd display set-brightness <0.0-1.0>` | 设置显示亮度 |
-| `cmd display reset-brightness-configuration` | 重置自动亮度配置 |
-| `wm size` | 查看显示逻辑尺寸 |
-| `wm density` | 查看显示密度 |
-| `settings put system accelerometer_rotation 0/1` | 锁定 / 解锁旋转 |
-
----
-
-## 24.13 动手实践（Try It）
-
-可以在真实设备或模拟器上执行以下实验，以把本章内容和系统行为对应起来：
-
-1. 运行 `dumpsys display`，观察逻辑显示、物理显示、DisplayGroup、刷新率与亮度相关字段。
-2. 运行 `dumpsys window display-areas`，查看当前 `DisplayArea` 层级，并对照窗口类型理解 Z 序组织方式。
-3. 运行 `dumpsys SurfaceFlinger --frametimeline`，在滚动列表或播放动画时观察 VSYNC 驱动下的帧时序与 deadline miss。
-4. 运行 `cmd display set-brightness 0.2` 与 `cmd display set-brightness 0.8`，观察 DisplayPowerController 如何驱动亮度变化。
-5. 运行 `wm size`、`wm density`，再结合旋转、分屏或外接显示，分析 `DisplayInfo` 与窗口可见尺寸如何变化。
-
----
-
-## 总结（Summary）
+## 小结
 
 Android 显示系统是一条纵向很深的技术栈，从硬件 VSYNC 中断开始，穿过原生 C++ 合成、Java 框架服务和应用层 API 一直到最终输出。定义这一系统的关键架构决策包括：
 
@@ -2644,26 +2518,44 @@ sequenceDiagram
 
 当总时长超过一个 VSYNC 周期时，该帧就会错过截止时间，并在下一个周期才显示，也就是常说的 jank。`FrameTimeline` 会记录这些超时，`perfetto` 和 `dumpsys SurfaceFlinger --frametimeline` 都能将其暴露出来用于性能分析。
 
-### 源码规模统计
+### 快速参考：关键源码路径
 
-显示系统的代码规模相当可观：
+| 组件 | 路径 |
+|------|------|
+| DisplayManagerService | `frameworks/base/services/core/java/com/android/server/display/DisplayManagerService.java` |
+| LogicalDisplay | `frameworks/base/services/core/java/com/android/server/display/LogicalDisplay.java` |
+| DisplayDevice | `frameworks/base/services/core/java/com/android/server/display/DisplayDevice.java` |
+| LogicalDisplayMapper | `frameworks/base/services/core/java/com/android/server/display/LogicalDisplayMapper.java` |
+| DisplayPowerController | `frameworks/base/services/core/java/com/android/server/display/DisplayPowerController.java` |
+| DisplayArea | `frameworks/base/services/core/java/com/android/server/wm/DisplayArea.java` |
+| DisplayAreaPolicyBuilder | `frameworks/base/services/core/java/com/android/server/wm/DisplayAreaPolicyBuilder.java` |
+| DisplayRotation | `frameworks/base/services/core/java/com/android/server/wm/DisplayRotation.java` |
+| DisplayCutout | `frameworks/base/core/java/android/view/DisplayCutout.java` |
+| CutoutSpecification | `frameworks/base/core/java/android/view/CutoutSpecification.java` |
+| Scheduler | `frameworks/native/services/surfaceflinger/Scheduler/Scheduler.h` |
+| RefreshRateSelector | `frameworks/native/services/surfaceflinger/Scheduler/RefreshRateSelector.h` |
+| VSyncPredictor | `frameworks/native/services/surfaceflinger/Scheduler/VSyncPredictor.h` |
+| VSyncDispatchTimerQueue | `frameworks/native/services/surfaceflinger/Scheduler/VSyncDispatchTimerQueue.h` |
+| EventThread | `frameworks/native/services/surfaceflinger/Scheduler/EventThread.h` |
+| LayerLifecycleManager | `frameworks/native/services/surfaceflinger/FrontEnd/LayerLifecycleManager.h` |
+| LayerSnapshotBuilder | `frameworks/native/services/surfaceflinger/FrontEnd/LayerSnapshotBuilder.h` |
+| CompositionEngine | `frameworks/native/services/surfaceflinger/CompositionEngine/include/compositionengine/CompositionEngine.h` |
+| BLASTBufferQueue | `frameworks/native/libs/gui/include/gui/BLASTBufferQueue.h` |
 
-| 组件 | 代码行数 |
-|------|----------|
-| DisplayManagerService.java | 6,601 |
-| DisplayPowerController.java | 3,507 |
-| DisplayRotation.java | 2,255 |
-| LogicalDisplay.java | 1,314 |
-| LogicalDisplayMapper.java | ~1,200 |
-| DisplayAreaPolicyBuilder.java | 1,052 |
-| DisplayArea.java | 882 |
-| ColorDisplayService.java | ~1,800 |
-| DeviceStateManagerService.java | ~1,500 |
-| RefreshRateSelector.cpp/.h | ~2,000 |
-| Scheduler.cpp/.h | ~1,500 |
-| LayerLifecycleManager.cpp/.h | ~800 |
-| LayerSnapshotBuilder.cpp/.h | ~1,200 |
-| BLASTBufferQueue.cpp/.h | ~1,500 |
-| **估算总计** | **约 25,000+** |
+### 调试命令
 
-这还不包括 SurfaceFlinger 主循环、CompositionEngine 具体实现、HWComposer HAL 接口、RenderEngine 以及客户端侧 Surface / Canvas / OpenGL 栈，这些部分合起来还会再增加 50,000 行以上代码。
+| 命令 | 用途 |
+|------|------|
+| `dumpsys display` | 查看 DisplayManagerService 状态 |
+| `dumpsys SurfaceFlinger` | 查看 SurfaceFlinger 图层树与合成统计 |
+| `dumpsys SurfaceFlinger --frametimeline` | 查看帧时序数据 |
+| `dumpsys SurfaceFlinger --list` | 列出所有图层 |
+| `dumpsys window displays` | 查看 WindowManagerService 的显示信息 |
+| `dumpsys window display-areas` | 查看 DisplayArea 层级 |
+| `dumpsys color_display` | 查看 ColorDisplayService 状态 |
+| `dumpsys device_state` | 查看 DeviceStateManagerService 状态 |
+| `cmd display set-brightness <0.0-1.0>` | 设置显示亮度 |
+| `cmd display reset-brightness-configuration` | 重置自动亮度配置 |
+| `wm size` | 查看显示逻辑尺寸 |
+| `wm density` | 查看显示密度 |
+| `settings put system accelerometer_rotation 0/1` | 锁定 / 解锁旋转 |

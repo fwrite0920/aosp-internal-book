@@ -1448,21 +1448,3 @@ Android 的账户与同步框架是一套非常成熟的基础设施。它把“
 5. 同步框架同时受 auto-sync 开关、authority syncable 状态、网络、backoff、App Standby 和 exemption 策略影响。
 6. `ContentResolver` 是同步 API 的主要入口，而 `ContentService` 则是应用进程到 `SyncManager` 的 Binder 桥梁。
 7. `SyncStorageEngine`、`SyncLogger` 和 `dumpsys content` 共同提供了同步状态持久化、审计和调试支撑。
-
-### 关键源码文件参考
-
-| 文件 | 作用 |
-|---|---|
-| `frameworks/base/core/java/android/accounts/AccountManager.java` | 应用侧账户 API |
-| `frameworks/base/core/java/android/accounts/AbstractAccountAuthenticator.java` | 认证器基类 |
-| `frameworks/base/core/java/android/accounts/IAccountManager.aidl` | 账户服务 AIDL |
-| `frameworks/base/core/java/android/accounts/IAccountAuthenticator.aidl` | 认证器 AIDL |
-| `frameworks/base/services/core/java/com/android/server/accounts/AccountManagerService.java` | 账户服务核心实现 |
-| `frameworks/base/services/core/java/com/android/server/accounts/AccountsDb.java` | 账户数据库层 |
-| `frameworks/base/services/core/java/com/android/server/accounts/TokenCache.java` | token 缓存 |
-| `frameworks/base/services/core/java/com/android/server/accounts/AccountAuthenticatorCache.java` | 认证器发现与缓存 |
-| `frameworks/base/services/core/java/com/android/server/content/ContentService.java` | 同步 Binder 入口 |
-| `frameworks/base/services/core/java/com/android/server/content/SyncManager.java` | 同步调度核心 |
-| `frameworks/base/services/core/java/com/android/server/content/SyncOperation.java` | 同步任务表示 |
-| `frameworks/base/services/core/java/com/android/server/content/SyncStorageEngine.java` | 同步状态持久化 |
-| `frameworks/base/services/core/java/com/android/server/content/SyncJobService.java` | JobScheduler 桥接 |

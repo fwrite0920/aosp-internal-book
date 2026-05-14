@@ -293,7 +293,7 @@ adb shell dumpsys media.codec
 #   owner, HAL name, rank, supported profiles/levels, color formats
 ```
 
-### 16.8.2 追踪一次视频解码会话
+#### 事件循环：`ALooper`
 
 ```bash
 # Capture a trace with video tag enabled
@@ -302,14 +302,14 @@ adb shell perfetto -o /data/misc/perfetto-traces/video_decode.pftrace -t 10s \
 adb pull /data/misc/perfetto-traces/video_decode.pftrace
 ```
 
-### 16.8.3 监控 Codec 资源使用
+#### 类型化消息：`AMessage`
 
 ```bash
 # Show current codec resource allocation
 adb shell dumpsys media.resource_manager
 ```
 
-### 16.8.4 检查 Camera Service 状态
+#### 同步 RPC：`PostAndAwaitResponse`
 
 ```bash
 # Full camera service dump
@@ -323,7 +323,7 @@ adb shell dumpsys media.camera
 # - Sensor privacy state
 ```
 
-### 16.8.5 检查 Media Extractor 插件
+### 16.8.2 检查 Media Extractor 插件
 
 ```bash
 # List loaded extractor plugins
@@ -332,11 +332,11 @@ adb shell dumpsys media.extractor
 # their supported formats, and version information.
 ```
 
-### 16.8.6 从代码查询 `VideoCapabilities`
+### 16.8.3 从代码查询 `VideoCapabilities`
 
 通过 `MediaCodecList`、`MediaCodecInfo` 和 `VideoCapabilities` API 可在应用或测试代码中查询分辨率、帧率与 bitrate 范围。
 
-### 16.8.7 构建并运行 Codec2 测试
+### 16.8.4 构建并运行 Codec2 测试
 
 ```bash
 # Build the codec2 command-line tool
@@ -345,7 +345,7 @@ m codec2
 # It can be used to test codec functionality directly from the command line
 ```
 
-### 16.8.8 检查 Codec HAL 服务
+### 16.8.5 检查 Codec HAL 服务
 
 ```bash
 # List running Codec2 HAL services
@@ -355,7 +355,7 @@ adb shell lshal | grep -i codec2
 # android.hardware.media.c2@1.0::IComponentStore/default
 ```
 
-### 16.8.9 触发 Codec 回收
+### 16.8.6 触发 Codec 回收
 
 ```bash
 # Filter for resource manager logs
@@ -365,7 +365,7 @@ adb logcat | grep -i ResourceManager
 # MediaCodec: reclaim(...) <component_name>
 ```
 
-### 16.8.10 读取一份 MediaCodec 指标报告
+### 16.8.7 读取一份 MediaCodec 指标报告
 
 ```bash
 # Dump MediaMetrics
@@ -380,83 +380,82 @@ adb shell dumpsys media.metrics
 # - android.media.mediacodec.judder-count: <judder events>
 ```
 
-### 16.2.10 详细的完整缓冲生命周期
+### 16.8.8 详细的完整缓冲生命周期
 
-#### 输入缓冲入队
+### 16.8.9 # 输入缓冲入队
 
 输入缓冲区会经历应用填充、queueInputBuffer、进入 codec 内部队列、等待处理并最终消费的完整周期。
 
-#### 大帧音频（Multi-Access-Unit Buffers）
+### 16.8.10 # 大帧音频（Multi-Access-Unit Buffers）
 
 对某些音频场景，单个缓冲区可能包含多个 access unit，需要特殊解析和边界处理。
 
-#### 安全输入缓冲区（DRM）
+### 16.2.16 # 安全输入缓冲区（DRM）
 
 DRM 安全路径要求输入缓冲使用受保护内存、加密元数据和安全 codec 能力，避免明文暴露。
 
-#### Codec2 原生缓冲入队
+### 16.3.11 # Codec2 原生缓冲入队
 
 Codec2 会把输入缓冲封装成 work item 或 block 进入组件调度系统，语义上比传统 queueBuffer 更结构化。
 
-#### 输出缓冲出队
+### 16.4.8 # 输出缓冲出队
 
 输出缓冲在 codec 处理完成后由应用出队，可能是字节缓冲、图形缓冲索引或 surface 输出的间接通知。
 
-#### 输出渲染与释放
+### 16.4.9 # 输出渲染与释放
 
 若输出绑定到 surface，releaseOutputBuffer 可触发渲染；否则应用需自行读取并处理字节缓冲。最终所有缓冲都要返回 codec 或 surface 系统复用。
 
-### 16.2.11 `onMessageReceived` 处理器
+### 16.5.9 `onMessageReceived` 处理器
 
 MediaCodec 内部大量行为由 `onMessageReceived()` 驱动，包括状态切换、缓冲回调、错误处理和同步 RPC 响应，是 Stagefright 状态机的核心入口之一。
 
-### 16.2.12 电池与功耗管理
+### 16.6.5 电池与功耗管理
 
 媒体系统会记录 codec 使用、帧率、硬件加速情况和后台播放状态，支撑电量归因与功耗优化。
 
-### 16.2.13 Vendor 参数支持
+### 16.7.7 Vendor 参数支持
 
 MediaCodec 与 Codec2 支持 vendor-defined 参数，用于暴露厂商特定能力，但 framework 层需要隔离并正确转译这些非标准字段。
 
-### 16.2.14 出队处理器：同步模式细节
+### 16.7.8 出队处理器：同步模式细节
 
 同步模式下，应用显式调用 dequeue API。框架内部需要处理超时、状态变化、EOS、缓冲可用性和同步唤醒。
 
-### 16.2.15 `ReleaseSurface`：无显示 drain
+## 16.9 # 16.2.15 `ReleaseSurface`：无显示 drain
 
 某些场景需要把视频解码 drain 掉而不真正显示到屏幕，`ReleaseSurface` 一类机制可为此提供虚拟输出目标。
 
-### 16.3.10 Codec2 错误处理与恢复
+### 16.9.1 Codec2 错误处理与恢复
 
 Codec2 框架必须处理组件崩溃、参数不兼容、HAL 断开和资源被回收等故障，并尽量提供可恢复路径或清晰错误传播。
 
-### 16.4.7 `StagefrightRecorder` 输出格式选择
+### 16.9.2 `StagefrightRecorder` 输出格式选择
 
 Recorder 会根据音视频源、编码器、容器和设备能力选择最终输出格式，并配置 muxer 参数与轨道布局。
 
-### 16.5.7 Camera HAL3 Request Pipeline 细节
+### 16.9.3 Camera HAL3 Request Pipeline 细节
 
 HAL3 request pipeline 包括 capture request 构造、buffer 附着、in-flight request 跟踪、result metadata 返回和 partial result 处理。
 
-### 16.5.8 Stream 管理与缓冲分配
+### 16.9.4 Stream 管理与缓冲分配
 
 CameraService 与 HAL3 需要为 preview、capture、recording、reprocess 等不同 stream 分配图形缓冲并维持生命周期一致性。
 
-### 16.6.4 Extractor 安全架构
+### 16.9.5 Extractor 安全架构
 
 Extractor 通常运行在隔离服务进程中，以降低恶意媒体文件触发漏洞后的影响范围。
 
-### 16.7.5 Codec 能力查询管线
+### 16.9.6 Codec 能力查询管线
 
 能力查询会结合 `MediaCodecList`、codec descriptor、profile/level、VideoCapabilities 与 vendor 报告，形成应用可见的能力结果。
 
-### 16.7.6 HDR 格式支持
+### 16.9.7 HDR 格式支持
 
 HDR 支持涉及 codec profile、色彩空间、容器元数据、显示设备能力和 surface/render 路径配合。
 
-## Summary
+### 16.9.8 Summary
 
-## 总结
 
 Android 媒体与视频系统由几条关键主线构成：
 
@@ -477,41 +476,41 @@ Android 媒体与视频系统由几条关键主线构成：
 4. **控制与数据分离**：Binder 用于控制，Surface/BufferQueue/共享缓冲用于高吞吐数据路径。
 5. **能力查询前置**：codec 与 camera 能力必须在配置前充分查询，避免运行时失败。
 
-### 16.2.16 Format Shaping
+### 16.9.9 Format Shaping
 
 Format shaping 用于在上层 `MediaFormat` 与底层 codec/容器可接受格式之间做归一化、裁剪和默认值填充。
 
-### 16.3.11 `SimpleC2Component`：基类模式
+### 16.9.10 `SimpleC2Component`：基类模式
 
 `SimpleC2Component` 提供实现软件 codec 组件的基础骨架，统一处理参数、work item 和生命周期接口。
 
-### 16.4.8 `MediaPlayerFactory`：播放器选择
+### 16.2.10 `MediaPlayerFactory`：播放器选择
 
 MediaPlayerFactory 根据数据源类型、协议、格式和能力选择合适 player 实现。
 
-### 16.4.9 `NuPlayerRenderer`：帧调度细节
+#### 输入 Buffer 入队
 
 Renderer 通过音频时钟和视频 PTS 比较决定是渲染、延迟还是丢帧，确保 A/V 同步尽可能稳定。
 
-### 16.5.9 Camera Torch（手电筒）管理
+#### 大帧音频（多 Access Unit Buffer）
 
 Torch 管理由 CameraService 协调，需处理设备占用、权限、闪光灯单元状态和错误回调。
 
-### 16.6.5 Extractor 插件加载
+#### 安全输入 Buffer（DRM）
 
 Extractor 插件按约定目录和 descriptor 加载，系统会验证其支持格式并将其纳入工厂选择流程。
 
-### 16.7.7 `PerformancePoint`：基于宏块的能力模型
+#### Codec2 Native Buffer 入队
 
 PerformancePoint 用宏块吞吐量表达视频能力，使不同分辨率和帧率可在统一模型下比较。
 
-### 16.7.8 `MPEG4Writer` 内部：Box/Atom 结构
+#### 输出 Buffer 出队
 
 MP4 容器由一组 box/atom 组成，例如 `ftyp`、`moov`、`mdat`。Writer 需要在录制过程中维护这些结构及其偏移、时序和索引。
 
-### 16.8.11 调试提示：常见问题与解决方案
+#### 输出渲染与释放
 
-### Issue: Codec Allocation Fails
+### 16.2.11 Issue: Codec Allocation Fails
 
 ```bash
 # Check how many codecs are in use
@@ -519,11 +518,11 @@ MP4 容器由一组 box/atom 组成，例如 `ftyp`、`moov`、`mdat`。Writer �
 adb shell dumpsys media.resource_manager
 ```
 
-### Issue: Video Playback Shows Green Frames
+### 16.2.12 Issue: Video Playback Shows Green Frames
 
 常见原因包括颜色格式不匹配、surface 绑定错误、vendor codec bug 或图形缓冲同步问题。
 
-### Issue: Audio-Video Sync Drift
+### 16.2.13 Issue: Audio-Video Sync Drift
 
 ```bash
 # Look for "too late" or "dropped" frame messages
@@ -531,7 +530,7 @@ adb shell dumpsys media.resource_manager
 adb logcat | grep -i NuPlayer
 ```
 
-### Issue: Camera Preview Freezes
+### 16.2.14 Issue: Camera Preview Freezes
 
 ```bash
 # Check active client connections
@@ -540,7 +539,7 @@ adb logcat | grep -i NuPlayer
 adb shell dumpsys media.camera
 ```
 
-### Issue: Media Extractor Returns `ERROR_UNSUPPORTED`
+### 16.2.15 Issue: Media Extractor Returns `ERROR_UNSUPPORTED`
 
 ```bash
 # Check which extractors are loaded
@@ -548,7 +547,7 @@ adb shell dumpsys media.camera
 adb shell dumpsys media.extractor
 ```
 
-### 16.8.12 使用 Perfetto 做性能分析
+### 16.3.10 使用 Perfetto 做性能分析
 
 ```text
 # media_trace_config.pbtx
@@ -556,15 +555,15 @@ adb shell dumpsys media.extractor
 
 Perfetto 可帮助分析解码时延、渲染卡顿、A/V sync、Camera request pipeline 和 Surface 显示时序。
 
-### 16.8.13 理解 Freeze 与 Judder 指标
+### 16.4.7 理解 Freeze 与 Judder 指标
 
 Freeze 通常表示更严重的显示停顿，Judder 表示节奏不均匀。二者都是视频体验质量的重要指标。
 
-### 16.8.14 Codec ID 生成与跟踪
+### 16.5.7 Codec ID 生成与跟踪
 
 系统会为 codec 实例生成唯一标识，用于日志、指标归因与资源管理追踪。
 
-### Key Source Files Reference
+### 16.5.8 Key Source Files Reference
 
 | 路径 | 用途 |
 |------|------|
@@ -575,54 +574,56 @@ Freeze 通常表示更严重的显示停顿，Judder 表示节奏不均匀。二
 | `frameworks/av/services/camera/libcameraservice/` | CameraService |
 | `frameworks/av/media/libstagefright/NuMediaExtractor.cpp` | 提取器封装 |
 
-## Appendix: Deep-Dive Topics
+### 16.6.4 Appendix: Deep-Dive Topics
 
-### A.1 `ALooper` / `AHandler` / `AMessage` 框架
+### 16.7.5 `ALooper` / `AHandler` / `AMessage` 框架
 
-#### `ALooper`：事件循环
+### 16.7.6 # `ALooper`：事件循环
 
 `ALooper` 是 Stagefright 内部的消息循环器，用于在专用线程中分发媒体状态机消息。
 
-#### `AMessage`：强类型消息
+### 16.9.11 # `AMessage`：强类型消息
 
 `AMessage` 允许以 key-value 形式携带强类型字段，适合状态切换、参数传递和异步响应。
 
-#### `PostAndAwaitResponse`：同步 RPC
+### 问题：`PostAndAwaitResponse` 同步 RPC
 
 尽管媒体框架大量是异步消息驱动，某些场景仍需要同步等待响应。`PostAndAwaitResponse` 提供这种同步 RPC 语义。
 
-### A.2 MediaCodec 域分类
+### 问题：MediaCodec 域分类
 
 媒体 codec 可按音频/视频、编码/解码、安全/非安全、软件/硬件、OMX/Codec2 等多个维度分类。
 
-### A.3 Secure Codec Path（DRM）
+### 问题：安全 Codec 路径（DRM）
 
 安全 codec 路径要求受保护缓冲、加密 metadata 和安全显示链路，以满足 DRM 内容保护要求。
 
-### A.4 Tunneled Playback Mode
+### 问题：Tunneled Playback 模式
 
 Tunneled playback 允许视频流在更贴近硬件的路径上播放，减少 CPU 参与，并与音频时钟更紧密协同。
 
-### A.5 Low-Latency Mode
+### 问题：低延迟模式
 
 低延迟模式适合实时视频通信、游戏流和交互式媒体场景，需要 codec、buffer 策略和渲染路径共同支持。
 
-### A.6 Multi-Access-Unit（Large Frame）Audio
+### 16.9.12 Multi-Access-Unit（Large Frame）Audio
 
 多 access unit 音频缓冲适用于特定编码或打包方式，需要 codec 和 extractor 处理单个缓冲内多个媒体单元。
 
-### A.7 Codec2 与 OMX 特性对比
+### 16.9.13 Codec2 与 OMX 特性对比
 
 Codec2 提供更现代的参数系统与组件模型；OMX 路径历史包袱更重，但仍在部分设备与组件中存在。
 
-### A.8 媒体框架进程边界
+### 16.9.14 媒体框架进程边界
 
 媒体系统通过拆分 extractor、codec、player、camera 等进程边界降低安全风险，也带来了更多 Binder 和 Surface 协调复杂度。
 
-### A.9 MediaCodec 生命周期汇总表
+### MediaCodec 生命周期汇总表
 
 MediaCodec 生命周期可概括为：创建 → 配置 → 启动 → 输入/输出循环 → flush/stop → release。
 
-### A.10 Codec 指标关键字段参考
+## 小结
+
+### Codec 指标关键字段参考
 
 常见字段包括 codec name、mime、resolution、latency、frames rendered、freeze、judder、error code 和 pipeline mode。

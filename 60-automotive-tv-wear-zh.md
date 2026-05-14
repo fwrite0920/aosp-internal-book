@@ -295,7 +295,7 @@ OEM 常见做法包括：
 - 电视：D-pad + 遥控器
 - 手表：触摸 + 按钮 / 表冠
 
-## 60.5 Try It
+## 60.5 动手实践
 
 ### 60.5.1 练习 1：探索 CarService 子服务
 
@@ -486,9 +486,9 @@ adb shell dumpsys overlay
 10. Wearable Sensing：
    `WearableSensingManagerService.java`、`WearableSensingManager.java`
 
-## Summary
+## 小结
 
-### Form Factor Comparison Matrix
+### 设备形态对比矩阵
 
 | 维度 | 手机 | 汽车 | TV | Wear |
 |---|---|---|---|---|
@@ -504,7 +504,7 @@ adb shell dumpsys overlay
 | 核心专属 HAL | 常规 | Vehicle / EVS / AudioControl | TvInput / CEC / Tuner | 传感器相关 |
 | 关键 feature | 默认 | `android.hardware.type.automotive` | `android.software.leanback` | `android.hardware.type.watch` |
 
-### Key Source Trees by Form Factor
+### 按设备形态划分的关键源码树
 
 | 形态 | 服务代码 | 应用 / UI | HAL 接口 | Product 配置 |
 |---|---|---|---|---|

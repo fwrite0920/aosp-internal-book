@@ -6,28 +6,6 @@ Android **View 系统** 是运行在应用进程内的客户端渲染与事件�
 
 本章将从源码层面对 View 系统做系统梳理：从 XML inflation 开始，一直跟到硬件加速渲染；精确拆解触摸分发算法；并考察焦点、无障碍、窗口 Insets、`LayoutInflater` 与自定义 View 的内部机制。
 
----
-
-## 本章引用的源码文件
-
-以下路径均相对于 AOSP 源码树根目录：
-
-| 文件 | 规模 | 作用 |
-|------|------|------|
-| `frameworks/base/core/java/android/view/View.java` | ~34,918 行 | 所有 UI 组件的基类 |
-| `frameworks/base/core/java/android/view/ViewGroup.java` | ~9,594 行 | 持有子 View 的容器基类 |
-| `frameworks/base/core/java/android/view/ViewRootImpl.java` | ~13,827 行 | View 树与 WMS 之间的桥 |
-| `frameworks/base/core/java/android/view/Choreographer.java` | ~1,714 行 | 帧调度与 VSYNC 协调 |
-| `frameworks/base/core/java/android/view/LayoutInflater.java` | ~1,247 行 | XML 到 View 的实例化 |
-| `frameworks/base/core/java/android/view/ThreadedRenderer.java` | ~928 行 | HWUI 硬件加速渲染代理 |
-| `frameworks/base/core/java/android/view/WindowInsets.java` | varies | 系统栏、IME、cutout、圆角等 Insets |
-| `frameworks/base/core/java/android/view/DisplayCutout.java` | varies | 屏幕刘海几何信息 |
-| `frameworks/base/core/java/android/view/FocusFinder.java` | varies | 方向焦点搜索算法 |
-| `frameworks/base/core/java/android/view/MotionEvent.java` | varies | 触摸/指针事件表示 |
-| `frameworks/base/core/java/android/graphics/RenderNode.java` | varies | HWUI display list 节点 |
-
----
-
 ## 25.1 View 层级：View、ViewGroup、ViewRootImpl
 
 ### 25.1.1 三个基础支柱
@@ -1977,7 +1955,36 @@ graph LR
 
 ---
 
-## 25.11 动手实践（Try It）
+## 25.11 Key Source File Quick Reference
+
+| 概念 | 主要文件 | 关键方法 / 类 |
+|------|----------|----------------|
+| View 测量 | `View.java:28542` | `measure()`、`onMeasure()` |
+| View 布局 | `View.java:25798` | `layout()`、`onLayout()` |
+| View 绘制 | `View.java:25251` | `draw()`、`onDraw()` |
+| MeasureSpec | `View.java:31726` | `MeasureSpec` |
+| View 触摸分发 | `View.java:16750` | `dispatchTouchEvent()` |
+| ViewGroup 触摸分发 | `ViewGroup.java:2646` | `dispatchTouchEvent()` |
+| 触摸拦截 | `ViewGroup.java:3311` | `onInterceptTouchEvent()` |
+| 默认触摸处理 | `View.java:18265` | `onTouchEvent()` |
+| Traversal 编排 | `ViewRootImpl.java:3574` | `performTraversals()` |
+| 调度 Traversal | `ViewRootImpl.java:3085` | `scheduleTraversals()` |
+| 根测量入口 | `ViewRootImpl.java:5082` | `performMeasure()` |
+| 根布局入口 | `ViewRootImpl.java:5148` | `performLayout()` |
+| 根绘制入口 | `ViewRootImpl.java:5767` | `draw()` |
+| Display list 录制 | `View.java:24064` | `updateDisplayListIfDirty()` |
+| 重绘触发 | `View.java:21249` | `invalidate()` |
+| 重新布局触发 | `View.java:28478` | `requestLayout()` |
+| Choreographer 帧处理 | `Choreographer.java:1157` | `doCallbacks()` |
+| Insets | `WindowInsets.java:80` | `WindowInsets`、`Type` |
+| Insets 分发 | `View.java:12931` | `dispatchApplyWindowInsets()` |
+| 无障碍 | `View.java:9513` | `createAccessibilityNodeInfo()` |
+| 布局加载 | `LayoutInflater.java:509` | `inflate()` |
+| 硬件渲染代理 | `ThreadedRenderer.java:67` | `ThreadedRenderer` |
+| 焦点搜索 | `FocusFinder.java:38` | `FocusFinder` |
+| ViewRootImpl 初始化 | `ViewRootImpl.java:1511` | `setView()` |
+
+## 25.12 动手实践
 
 ### 实验 25.1：跟踪 Measure-Layout-Draw 周期
 
@@ -2100,7 +2107,7 @@ graph LR
 
 ---
 
-## 总结（Summary）
+## 小结
 
 本章从源码层系统梳理了 Android View System 的关键组成部分：
 
@@ -2116,34 +2123,3 @@ graph LR
 - **自定义 View**：自定义控件的本质，是正确实现测量、绘制、事件与状态保存，并在性能上避免无谓的布局和重绘。
 
 View 系统是 Android 应用层 UI 的真正执行现场。理解 `MeasureSpec` 的位打包、`Choreographer` 的 VSYNC 节奏、`ViewRootImpl` 的同步屏障、`RenderNode` 的 display list 录制方式，对于开发高性能 Android UI、排查布局异常、理解输入链路和提升动画流畅度都至关重要。
-
----
-
-## 关键源码文件速查表
-
-| 概念 | 主要文件 | 关键方法 / 类 |
-|------|----------|----------------|
-| View 测量 | `View.java:28542` | `measure()`、`onMeasure()` |
-| View 布局 | `View.java:25798` | `layout()`、`onLayout()` |
-| View 绘制 | `View.java:25251` | `draw()`、`onDraw()` |
-| MeasureSpec | `View.java:31726` | `MeasureSpec` |
-| View 触摸分发 | `View.java:16750` | `dispatchTouchEvent()` |
-| ViewGroup 触摸分发 | `ViewGroup.java:2646` | `dispatchTouchEvent()` |
-| 触摸拦截 | `ViewGroup.java:3311` | `onInterceptTouchEvent()` |
-| 默认触摸处理 | `View.java:18265` | `onTouchEvent()` |
-| Traversal 编排 | `ViewRootImpl.java:3574` | `performTraversals()` |
-| 调度 Traversal | `ViewRootImpl.java:3085` | `scheduleTraversals()` |
-| 根测量入口 | `ViewRootImpl.java:5082` | `performMeasure()` |
-| 根布局入口 | `ViewRootImpl.java:5148` | `performLayout()` |
-| 根绘制入口 | `ViewRootImpl.java:5767` | `draw()` |
-| Display list 录制 | `View.java:24064` | `updateDisplayListIfDirty()` |
-| 重绘触发 | `View.java:21249` | `invalidate()` |
-| 重新布局触发 | `View.java:28478` | `requestLayout()` |
-| Choreographer 帧处理 | `Choreographer.java:1157` | `doCallbacks()` |
-| Insets | `WindowInsets.java:80` | `WindowInsets`、`Type` |
-| Insets 分发 | `View.java:12931` | `dispatchApplyWindowInsets()` |
-| 无障碍 | `View.java:9513` | `createAccessibilityNodeInfo()` |
-| 布局加载 | `LayoutInflater.java:509` | `inflate()` |
-| 硬件渲染代理 | `ThreadedRenderer.java:67` | `ThreadedRenderer` |
-| 焦点搜索 | `FocusFinder.java:38` | `FocusFinder` |
-| ViewRootImpl 初始化 | `ViewRootImpl.java:1511` | `setView()` |

@@ -258,6 +258,30 @@ tile 注入依赖以下几层配合：
 
 每个条目都对应一个 `PreferenceController`。这种模式让新增一个开发选项时，只需增加控制器、XML 和注册逻辑即可。
 
+#### 调试
+
+调试类选项包括 USB 调试、bugreport、strict mode、调试应用和日志相关入口。
+
+#### 绘制 / GPU
+
+绘制与 GPU 类选项用于观察布局边界、overdraw、GPU 渲染耗时和硬件加速行为。
+
+#### 动画
+
+动画类选项控制窗口、过渡和 Animator 时长缩放。
+
+#### 网络
+
+网络类选项覆盖 Wi-Fi、蓝牙、移动网络和网络验证相关调试开关。
+
+#### 系统
+
+系统类选项覆盖后台进程限制、崩溃行为、WebView、自动填充等系统级开关。
+
+#### 蓝牙
+
+蓝牙类选项用于选择 codec、采样率、位深和蓝牙协议调试行为。
+
 ### 49.3.4 开启门槛
 
 开发者选项的门槛是分层的：
@@ -472,6 +496,62 @@ Settings 近年的 UI 演进主要围绕 Material Design、Monet 动态色和大
 
 开发者选项页拥有数量极多的控制器。通常会在页面初始化时集中创建这些控制器，并把它们注册到统一列表，再由页面宿主在开关变化时逐个回调。
 
+#### 内存与诊断
+
+内存与诊断类控制器覆盖 bugreport、内存、严格模式和诊断输出。
+
+#### 安全与启动
+
+安全与启动类控制器覆盖 OEM unlock、验证启动、调试授权和相关保护开关。
+
+#### 调试工具
+
+调试工具类控制器覆盖 ADB、调试应用、等待调试器和日志选项。
+
+#### 显示与渲染
+
+显示与渲染类控制器覆盖布局边界、刷新率、显示 cutout、颜色和渲染调试。
+
+#### 动画
+
+动画类控制器覆盖窗口、过渡和 Animator 缩放。
+
+#### GPU 分析
+
+GPU profiling 类控制器覆盖 HWUI、overdraw、GPU 渲染条和图形 trace。
+
+#### 网络
+
+网络类控制器覆盖 Wi-Fi、移动网络、网络验证和 tethering 调试。
+
+#### 蓝牙
+
+蓝牙类控制器覆盖 codec、AVRCP、Gabeldorsche 和蓝牙日志。
+
+#### NFC
+
+NFC 类控制器覆盖 NFC stack 调试和相关实验性开关。
+
+#### 音频
+
+音频类控制器覆盖绝对音量、路由、采样和蓝牙音频调试。
+
+#### 进程管理
+
+进程管理类控制器覆盖后台进程限制、cached app freezer 和进程行为调试。
+
+#### 日志
+
+日志类控制器覆盖 verbose log、stats 和 bugreport 相关入口。
+
+#### 桌面与窗口
+
+桌面与窗口类控制器覆盖自由窗口、桌面模式和多窗口实验。
+
+#### 其他
+
+其他控制器承载难以归类但仍需在开发者选项中暴露的实验开关。
+
 ### 49.9.2 Enable / Disable 回调
 
 总开关开启时，控制器会把自身状态同步到 UI 与底层系统；关闭时，则要回滚或恢复默认值。这里的复杂点在于并非所有选项都简单写一个 key，有些会：
@@ -481,7 +561,7 @@ Settings 近年的 UI 演进主要围绕 Material Design、Monet 动态色和大
 - 触发重启某个子系统
 - 与 adb、overlay、渲染管线联动
 
-### 49.9.3 控制器模式的价值
+控制器模式的价值：
 
 如果没有控制器抽象，开发者选项会迅速退化成一个难以维护的巨大 Fragment。正是因为每个条目独立封装，Settings 才能承受上百个调试开关的长期演进。
 
@@ -729,9 +809,17 @@ adb shell dumpsys settings
 
 前者适合实时观察变更流，后者适合一次性查看完整 Provider 状态、generation 和默认值来源。
 
-## 49.19 动手实践：添加一个自定义 Settings 页面
+### 49.18.6 SettingsProvider Dump
 
-### 49.19.1 第一步：定义 Preference XML
+`dumpsys settings` 可查看 SettingsProvider 当前缓存、命名空间、generation 和部分诊断状态。
+
+## 49.19 Key Source Files Reference
+
+Settings 关键源码包括 `SettingsHomepageActivity`、`DashboardFragment`、各类 preference controller、`SettingsProvider`、search index provider、FeatureFactory 和 AndroidManifest 入口声明。
+
+## 49.20 动手实践：添加一个自定义 Settings 页面
+
+### 49.20.1 第一步：定义 Preference XML
 
 先在 `res/xml/` 下创建页面资源，例如：
 
@@ -744,7 +832,7 @@ adb shell dumpsys settings
 </PreferenceScreen>
 ```
 
-### 49.19.2 第二步：创建 `DashboardFragment`
+### 49.20.2 第二步：创建 `DashboardFragment`
 
 ```java
 public class CustomFeatureFragment extends DashboardFragment {
@@ -767,7 +855,7 @@ public class CustomFeatureFragment extends DashboardFragment {
 }
 ```
 
-### 49.19.3 第三步：创建控制器
+### 49.20.3 第三步：创建控制器
 
 ```java
 public class CustomFeaturePreferenceController extends TogglePreferenceController {
@@ -796,11 +884,11 @@ public class CustomFeaturePreferenceController extends TogglePreferenceControlle
 }
 ```
 
-### 49.19.4 第四步：在页面中注册控制器
+### 49.20.4 第四步：在页面中注册控制器
 
 在 Fragment 中实现 `createPreferenceControllers()`，把控制器加入返回列表。这样页面在构建 Preference 时才能把 XML 条目与控制器逻辑绑定起来。
 
-### 49.19.5 第五步：创建 Activity Stub
+### 49.20.5 第五步：创建 Activity Stub 类
 
 在 `Settings.java` 中添加一个内部类，例如：
 
@@ -808,7 +896,7 @@ public class CustomFeaturePreferenceController extends TogglePreferenceControlle
 public static class CustomFeatureSettingsActivity extends SettingsActivity { }
 ```
 
-### 49.19.6 第六步：声明 Manifest
+### 49.20.6 第六步：声明 Manifest
 
 ```xml
 <activity
@@ -818,11 +906,11 @@ public static class CustomFeatureSettingsActivity extends SettingsActivity { }
 
 如果需要从外部 action 或 tile 打开，还要补上相应的 intent filter 或 metadata。
 
-### 49.19.7 第七步：注册 `SettingsGateway`
+### 49.20.7 第七步：注册 `SettingsGateway`
 
 如果页面通过统一宿主加载 Fragment，就必须把新的 Fragment 类名加入 `SettingsGateway` 白名单，否则运行时会因为安全校验失败而拒绝加载。
 
-### 49.19.8 第八步：从系统设置中挂入口
+### 49.20.8 第八步：从系统设置中挂入口
 
 有两种常见方法：
 
@@ -831,11 +919,11 @@ public static class CustomFeatureSettingsActivity extends SettingsActivity { }
 
 前者简单直接，后者更适合可选功能或 OEM 扩展。
 
-### 49.19.9 第九步：让它可搜索
+### 49.20.9 第九步：让它可搜索
 
 为页面提供 `SEARCH_INDEX_DATA_PROVIDER`，至少把 XML 资源和不可索引 key 逻辑定义清楚。否则用户只能通过导航层级找到它，无法从搜索入口直达。
 
-### 49.19.10 第十步：完整生命周期图
+### 49.20.10 第十步：完整生命周期图
 
 ```mermaid
 flowchart TD
@@ -848,7 +936,7 @@ flowchart TD
     G --> H["Preference UI 刷新"]
 ```
 
-### 49.19.11 第十一步：构建与验证
+### 49.20.11 第十一步：构建与验证
 
 ```bash
 source build/envsetup.sh
@@ -862,7 +950,7 @@ adb shell settings get secure custom_feature_enabled
 
 前三条在 AOSP 根目录执行，后面几条用于部署 APK、重启 Settings 并验证设置值是否真的写入了 `SettingsProvider`。
 
-### 49.19.12 第十二步：进阶扩展
+### 49.20.12 第十二步：进阶扩展
 
 进一步可以做的事情包括：
 
@@ -872,7 +960,7 @@ adb shell settings get secure custom_feature_enabled
 - 通过 `FeatureFactory` 或 overlay 做 OEM 定制
 - 在双栏模式下增加 highlight 支持
 
-## Summary
+## 小结
 
 Settings 是 Android 框架中最“应用化”的系统组件之一，但它的内部组织方式却非常工程化：宿主 Activity、Fragment、控制器、tile 注入、搜索索引和 `SettingsProvider` 各司其职，使上百个设置项能在同一个应用中长期演化而不至于失控。
 
@@ -886,7 +974,7 @@ Settings 是 Android 框架中最“应用化”的系统组件之一，但它�
 - 搜索体系通过 `BaseSearchIndexProvider` 和 `SettingsSearchIndexablesProvider` 把静态 XML、动态 raw data 和不可索引项统一整理成可搜索数据。
 - 大屏双栏、Activity Embedding、FeatureFactory、Slices 与 SPA 迁移，体现了 Settings 既要兼容传统 Preference 页面，又要持续适配新形态和新架构。
 
-### 关键源码路径
+关键源码路径：
 
 | 组件 | 路径 |
 |---|---|

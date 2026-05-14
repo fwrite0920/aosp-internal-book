@@ -96,11 +96,11 @@ Signal chain 允许 ART 处理崩溃、空指针、调试和 instrumentation 相
 
 ART 的 `monitor` 实现支撑 Java `synchronized` 语义，并处理竞争、等待/唤醒和对象锁升级。
 
-#### Thin Locks vs Fat Locks
+#### 薄锁与胖锁
 
 轻量锁适用于低竞争快速路径；在高竞争或需要 wait/notify 时会膨胀为 fat lock。
 
-#### Monitor Pool
+#### 监视器池
 
 Monitor pool 管理膨胀后的 monitor 对象，避免频繁系统分配开销。
 
@@ -190,15 +190,15 @@ Android 在 DEX 或相关元数据中维护 hidden API 限制信息，用于运�
 
 ### 18.2.10 DEX 字节码指令
 
-#### Move Instructions
+#### 移动指令
 
 数据移动、寄存器复制与结果搬运指令。
 
-#### Return Instructions
+#### 返回指令
 
 方法返回相关指令。
 
-#### Const Instructions
+#### 常量指令
 
 常量加载与字面量构造。
 
@@ -206,7 +206,7 @@ Android 在 DEX 或相关元数据中维护 hidden API 限制信息，用于运�
 
 字段读写、静态字段访问与对象成员操作。
 
-#### Invoke Instructions
+#### 调用指令
 
 虚方法、直接方法、接口方法与静态方法调用。
 
@@ -292,11 +292,11 @@ Boot image 编译会把核心类库与预初始化对象放入共享镜像，供
 
 ### 18.3.6 输出文件格式
 
-#### OAT 文件
+#### 编译产物：OAT 文件
 
 OAT 存放已编译代码、元数据、dex 引用和运行时辅助信息。
 
-#### VDEX 文件
+#### 验证产物：VDEX 文件
 
 VDEX 存放验证数据、去 quicken 信息和与 DEX 相关的辅助内容。
 
@@ -410,43 +410,43 @@ JIT 与 AOT 共享 ART optimizing compiler 的大部分 IR 和优化能力。
 
 ### 18.4.13 优化编译器 Pass 细节
 
-#### Inlining（`inliner.cc`）
+#### 内联（`inliner.cc`）
 
 内联小函数或热点调用，减少调用开销并暴露更多优化机会。
 
-#### Constant Folding（`constant_folding.cc`）
+#### 常量折叠（`constant_folding.cc`）
 
 编译期折叠常量表达式。
 
-#### Dead Code Elimination（`dead_code_elimination.cc`）
+#### 死代码消除（`dead_code_elimination.cc`）
 
 移除不可达或无副作用死代码。
 
-#### Bounds Check Elimination（`bounds_check_elimination.cc`）
+#### 边界检查消除（`bounds_check_elimination.cc`）
 
 移除可证明安全的数组边界检查。
 
-#### Code Sinking（`code_sinking.cc`）
+#### 代码下沉（`code_sinking.cc`）
 
 把指令下沉到更合适位置，减少热路径负担。
 
-#### Write Barrier Elimination（`write_barrier_elimination.cc`）
+#### 写屏障消除（`write_barrier_elimination.cc`）
 
 在安全前提下移除冗余写屏障。
 
-#### Constructor Fence Redundancy Elimination
+#### 构造函数 Fence 冗余消除
 
 优化构造函数中的冗余内存屏障。
 
-#### Control Flow Simplification（`control_flow_simplifier.cc`）
+#### 控制流简化（`control_flow_simplifier.cc`）
 
 简化控制流图结构，便于后续优化。
 
-#### SSA 优化
+#### 静态单赋值优化（SSA）
 
 基于 SSA 形式执行更强的数据流分析与值传播。
 
-#### Register Allocation（`register_allocator_linear_scan.cc`）
+#### 寄存器分配（`register_allocator_linear_scan.cc`）
 
 为目标 ISA 分配物理寄存器，是后端代码生成关键步骤。
 
@@ -456,11 +456,11 @@ JIT 与 AOT 共享 ART optimizing compiler 的大部分 IR 和优化能力。
 
 ### 18.4.14 Entrypoints
 
-#### Quick Entrypoints（`quick_entrypoints.h`）
+#### Quick 入口点（`quick_entrypoints.h`）
 
 Quick entrypoints 提供常用运行时辅助调用入口。
 
-#### Runtime ASM Entrypoints（`runtime_asm_entrypoints.h`）
+#### Runtime ASM 入口点（`runtime_asm_entrypoints.h`）
 
 汇编入口点处理方法调用、异常、栈框架和特定快速路径。
 
@@ -510,19 +510,19 @@ ART 提供多种 GC collector，例如 concurrent copying、mark-compact 与代�
 
 ### 18.5.4 记账基础设施
 
-#### Card Table（`card_table.h`）
+#### 卡表（Card Table，`card_table.h`）
 
 记录跨代或跨区域写入的脏卡信息。
 
-#### Space Bitmap（`space_bitmap.h`）
+#### 空间位图（Space Bitmap，`space_bitmap.h`）
 
 表示对象是否被标记或已分配。
 
-#### Mod Union Table（`mod_union_table.h`）
+#### 修改联合表（Mod Union Table，`mod_union_table.h`）
 
 用于某些空间间引用跟踪。
 
-#### Read Barrier Table（`read_barrier_table.h`）
+#### 读屏障表（Read Barrier Table，`read_barrier_table.h`）
 
 支撑并发复制和读屏障语义。
 
@@ -530,7 +530,7 @@ ART 提供多种 GC collector，例如 concurrent copying、mark-compact 与代�
 
 Concurrent Copying（CC）是现代 ART 的关键 GC 实现之一。
 
-#### CC 收集阶段
+#### 并发复制收集阶段（CC）
 
 包括标记、复制、引用更新和清理等阶段。
 
@@ -542,11 +542,11 @@ Concurrent Copying（CC）是现代 ART 的关键 GC 实现之一。
 
 转发指针用于标识对象已被移动到新位置。
 
-#### Immune Spaces
+#### 免疫空间
 
 某些空间在一次 GC 中可被视为 immune，减少扫描成本。
 
-#### Mark Stack 处理
+#### 标记栈处理
 
 标记栈推进是可达性分析核心环节。
 
@@ -556,23 +556,23 @@ Generational GC 利用“新对象更可能死亡”的经验优化年轻代回�
 
 ### 18.5.7 Heap Spaces
 
-#### RegionSpace
+#### 区域空间（RegionSpace）
 
 适合并发复制与区域化管理。
 
-#### Thread-Local Allocation Buffers（TLABs）
+#### 线程本地分配缓冲区（TLAB）
 
 为线程提供快速分配缓冲区，减少锁竞争。
 
-#### NonMovingSpace
+#### 非移动空间（NonMovingSpace）
 
 存放不宜移动或需要稳定地址的对象。
 
-#### LargeObjectSpace
+#### 大对象空间（LargeObjectSpace）
 
 大对象通常进入独立空间，避免移动和碎片问题加剧。
 
-#### ImageSpace
+#### 镜像空间（ImageSpace）
 
 boot image 和相关镜像对象位于 image space。
 
@@ -668,23 +668,23 @@ vtable 支撑虚方法快速分派。
 
 ### 18.6.10 类链接内部流程
 
-#### Step 1: 父类解析
+#### 第 1 步：父类解析
 
 首先解析并确保父类已可用。
 
-#### Step 2: 接口解析
+#### 第 2 步：接口解析
 
 处理接口层次与实现关系。
 
-#### Step 3: 虚方法链接
+#### 第 3 步：虚方法链接
 
 生成和继承 vtable 条目。
 
-#### Step 4: 字段布局
+#### 第 4 步：字段布局
 
 确定实例字段与静态字段布局。
 
-#### Step 5: IMT 填充
+#### 第 5 步：IMT 填充
 
 为接口调用生成方法表条目。
 
@@ -698,19 +698,19 @@ DexCache 缓存解析结果，加快后续类与方法访问。
 
 ### 18.6.13 解析：字符串、类型、方法、字段
 
-#### String Resolution
+#### 字符串解析
 
 把 dex 字符串索引解析为运行时字符串对象。
 
-#### Type Resolution
+#### 类型解析
 
 解析类型描述符为运行时类对象。
 
-#### Method Resolution
+#### 方法解析
 
 确定调用目标方法定义。
 
-#### Field Resolution
+#### 字段解析
 
 解析字段所属类与偏移信息。
 
@@ -944,7 +944,7 @@ ART 上报启动、编译、GC、JIT 和运行时健康指标。
 
 ### 18.10.12 诊断命令
 
-#### SIGQUIT 线程转储
+#### 线程转储：SIGQUIT
 
 ```text
 # Output written to /data/anr/traces.txt or logcat
@@ -986,202 +986,200 @@ AOSP 提供大量 runtime、compiler、GC、dex2oat 和 JVMTI 测试。
 
 ## 18.11 动手实践
 
-### Exercise 18.1 -- 检查一个 DEX 文件
+### 练习 18.1：检查一个 DEX 文件
 
 ```bash
-# Build dexdump if needed
-# Dump the header of framework.jar's DEX file
-# Dump a specific class
+# 按需构建 dexdump
+# 导出 framework.jar 中 DEX 文件的 header
+# 导出指定类
 ```
 
-### Exercise 18.2 -- 检查 OAT Header 元数据
+### 练习 18.2：检查 OAT Header 元数据
 
 ```bash
-# Dump the boot image OAT header
-# Look for the compiler filter, boot classpath, and compilation reason
+# 导出 boot image 的 OAT header
+# 查看 compiler filter、boot classpath 和 compilation reason
 ```
 
-### Exercise 18.3 -- 观察 JIT 编译
+### 练习 18.3：观察 JIT 编译
 
 ```bash
-# Enable JIT verbose logging
-# Start an app and observe JIT compilations in logcat
+# 开启 JIT verbose 日志
+# 启动应用并在 logcat 中观察 JIT 编译
 ```
 
-### Exercise 18.4 -- 触发并观察 GC
+### 练习 18.4：触发并观察 GC
 
 ```bash
-# Enable GC verbose logging
-# Force GC via DDMS or:
-# Observe GC log
+# 开启 GC verbose 日志
+# 通过 DDMS 或命令强制 GC
+# 观察 GC 日志
 ```
 
-### Exercise 18.5 -- 为应用生成 profile 并触发 bg-dexopt
+### 练习 18.5：为应用生成 profile 并触发 bg-dexopt
 
 ```bash
-# Get the current profile for an app
-# Force profile compilation
-# Check the compilation result
+# 获取应用当前 profile
+# 强制执行 profile 编译
+# 检查编译结果
 ```
 
-### Exercise 18.6 -- 检查 odrefresh 行为
+### 练习 18.6：检查 odrefresh 行为
 
 ```bash
-# Check current odrefresh status
-# Check which ISAs have boot images
-# Force odrefresh to check artifacts
+# 检查当前 odrefresh 状态
+# 检查哪些 ISA 拥有 boot image
+# 强制 odrefresh 检查编译产物
 ```
 
-### Exercise 18.7 -- 检查 Native Library Namespaces
+### 练习 18.7：检查 Native Library Namespaces
 
 ```bash
-# List public libraries
-# Check vendor public libraries
-# See the linker namespace configuration for an app process
+# 列出 public libraries
+# 检查 vendor public libraries
+# 查看应用进程的 linker namespace 配置
 ```
 
-### Exercise 18.8 -- 使用 JVMTI 调试
+### 练习 18.8：使用 JVMTI 调试
 
 ```bash
-# Enable debuggable mode for an app
-# List available JVMTI agents
+# 为应用开启 debuggable 模式
+# 列出可用 JVMTI agent
 ```
 
-### Exercise 18.9 -- 走读类加载链路
+### 练习 18.9：走读类加载链路
 
 从 class loader、DexPathList、ClassLinker、FindClass 和 DefineClass 逐层分析某个类的加载路径。
 
-### Exercise 18.10 -- 测量 GC Pause 时间
+### 练习 18.10：测量 GC 暂停时间
 
 ```bash
-# Dump ART runtime info
-# Read the trace file
+# 导出 ART runtime 信息
+# 阅读 trace 文件
 ```
 
-### Exercise 18.11 -- 手工构建并运行 dex2oat
+### 练习 18.11：手工构建并运行 dex2oat
 
 ```bash
-# Run dex2oat with verbose output
+# 以 verbose 输出运行 dex2oat
 ```
 
-### Exercise 18.12 -- 追踪 ART 启动
+### 练习 18.12：追踪 ART 启动
 
 ```bash
-# Record a Perfetto trace with ART categories
+# 录制包含 ART category 的 Perfetto trace
 ```
 
-### Exercise 18.13 -- 检查 `ArtMethod` 内部
+### 练习 18.13：检查 `ArtMethod` 内部
 
 ```bash
-# Dump all methods of a specific class
-# Then analyze with Android Studio's heap profiler
-# Alternatively, use SIGQUIT to see method info in the trace
+# 导出指定类的所有方法
+# 再用 Android Studio heap profiler 分析
+# 也可以用 SIGQUIT 在 trace 中查看方法信息
 ```
 
-### Exercise 18.14 -- 比较编译过滤器
+### 练习 18.14：比较编译过滤器
 
 ```bash
-# Verify only (fastest compile, slowest run)
-# Speed (compile everything)
-# Compare file sizes
-# Compare using oatdump
+# 仅 verify，编译最快，运行最慢
+# speed，编译全部内容
+# 比较文件大小
+# 使用 oatdump 比较
 ```
 
-### Exercise 18.15 -- 监控类加载
+### 练习 18.15：监控类加载
 
 ```bash
-# Enable verbose class loading
-# Launch an app
-# Watch class loading in logcat
+# 开启 verbose class loading
+# 启动应用
+# 在 logcat 中观察类加载
 ```
 
-### Exercise 18.16 -- 检查 Boot Image
+### 练习 18.16：检查 Boot Image
 
 ```bash
-# List boot image files
-# Dump boot image info
-# Count classes in the boot image
+# 列出 boot image 文件
+# 导出 boot image 信息
+# 统计 boot image 中的类
 ```
 
-### Exercise 18.17 -- Profile-Guided Optimization 工作流
+### 练习 18.17：Profile-Guided Optimization 工作流
 
 ```bash
-# Step 1: Install app (gets verify filter initially)
-# Step 2: Use the app to generate profile data
-# Step 3: Check profile exists
-# Step 4: Merge profiles
-# Step 5: Verify the result
+# 步骤 1：安装应用，初始状态获得 verify filter
+# 步骤 2：使用应用生成 profile 数据
+# 步骤 3：检查 profile 是否存在
+# 步骤 4：合并 profile
+# 步骤 5：验证结果
 ```
 
-### Exercise 18.18 -- 探索 GC Spaces
+### 练习 18.18：探索 GC Spaces
 
 ```bash
-# Trigger heap dump via SIGQUIT
-# Look for space information in the trace
+# 通过 SIGQUIT 触发 heap dump
+# 在 trace 中查找 space 信息
 ```
 
-### Exercise 18.19 -- VDEX 文件分析
+### 练习 18.19：分析 VDEX 文件
 
 ```bash
-# Find the VDEX file for an app
-# Use oatdump to examine the VDEX
-# Check verifier dependencies
+# 查找应用对应的 VDEX 文件
+# 使用 oatdump 检查 VDEX
+# 检查 verifier dependencies
 ```
 
-### Exercise 18.20 -- 理解 `ArtMethod` 入口点
+### 练习 18.20：理解 `ArtMethod` 入口点
 
 分析解释器入口、quick compiled code 入口和 JNI 入口的切换逻辑。
 
-### Exercise 18.21 -- 检查 Monitor 竞争
+### 练习 18.21：检查 Monitor 竞争
 
 ```bash
-# Enable monitor logging
+# 开启 monitor 日志
 ```
 
-### Exercise 18.22 -- 端到端 PGO 编译
+### 练习 18.22：端到端 PGO 编译
 
 ```bash
-# 1. Check initial compilation state
-# 2. Clear existing profiles
-# 3. Use the app normally for 5 minutes to generate profile data
-# 4. Dump the profile
-# 5. Trigger PGO compilation
-# 6. Verify the new compilation state
-# 7. Compare cold-start time before and after PGO
+# 1. 检查初始编译状态
+# 2. 清除已有 profile
+# 3. 正常使用应用 5 分钟以生成 profile 数据
+# 4. 导出 profile
+# 5. 触发 PGO 编译
+# 6. 验证新的编译状态
+# 7. 比较 PGO 前后的冷启动时间
 ```
 
-### Exercise 18.23 -- 检查 Lock Word
+### 练习 18.23：检查 Lock Word
 
 ```bash
-# Capture a heap dump
-# Analyze with Android Studio's Memory Profiler or jhat
-# Look for objects with non-zero lock word values
-# indicating active monitors or hash codes
+# 捕获 heap dump
+# 使用 Android Studio Memory Profiler 或 jhat 分析
+# 查找 lock word 值非零的对象
+# 这些对象通常表示活跃 monitor 或 hash code
 ```
 
-### Exercise 18.24 -- 比较解释器与编译代码性能
+### 练习 18.24：比较解释器与编译代码性能
 
 ```bash
-# Run with interpreter only (no JIT, no AOT)
-# Run the benchmark and record time
-# Run with JIT enabled
-# Run the benchmark again and compare
-# Run with full AOT
-# Run the benchmark again and compare all three
+# 仅使用解释器运行，关闭 JIT 和 AOT
+# 运行 benchmark 并记录时间
+# 开启 JIT 后运行
+# 再次运行 benchmark 并比较
+# 使用完整 AOT 运行
+# 再次运行 benchmark 并比较三组结果
 ```
 
-### Exercise 18.25 -- 模拟 OTA 并观察 odrefresh
+### 练习 18.25：模拟 OTA 并观察 odrefresh
 
 ```bash
-# Check current odrefresh cache info
-# Delete artifacts to simulate need for recompilation
-# Trigger odrefresh manually
-# Check metrics
+# 检查当前 odrefresh cache 信息
+# 删除编译产物以模拟重新编译需求
+# 手动触发 odrefresh
+# 检查 metrics
 ```
 
-## Summary
-
-## 总结
+## 小结
 
 ART 是 Android 应用执行的核心基础设施，其职责可概括为：
 
@@ -1205,7 +1203,7 @@ ART 的关键架构思想包括：
 5. **GC 与线程暂停机制围绕移动对象和低停顿优化设计**。
 6. **JNI 与 native namespace 机制共同维持 Java/native 边界安全**。
 
-### Architecture Cross-Reference
+### 架构交叉关系
 
 ART 与系统其他子系统密切相关：
 
@@ -1214,7 +1212,7 @@ ART 与系统其他子系统密切相关：
 - 与 linker / libnativeloader 管理 native 库加载。
 - 与 Perfetto、JVMTI、debugger 集成提供调试能力。
 
-### Performance Characteristics
+### 性能特征
 
 ART 性能主要受以下因素影响：
 
@@ -1225,7 +1223,7 @@ ART 性能主要受以下因素影响：
 - 类加载与验证路径复杂度
 - JNI 边界频率
 
-### Version History
+### 版本演进
 
 ART 从 Dalvik 时代的替代方案发展为 Android 统一运行时，经历了：
 

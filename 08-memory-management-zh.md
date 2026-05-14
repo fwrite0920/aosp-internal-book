@@ -1,8 +1,8 @@
 # 第 8 章：内存管理
 
-内存管理可以说是移动操作系统中最关键的子系统。Android 设备运行在严格的物理约束下，即便旗舰手机拥有 8 到 16 GB RAM，用户也常常安装几十个应用，并期望它们之间可以即时切换。本章拆解 AOSP 如何从硬件页表一直到开发者可见的 Java `onTrimMemory()` 回调来协调内存。我们会跟踪 Linux 内核虚拟内存子系统、用户态 Low Memory Killer Daemon（lmkd）、cgroup accounting、压缩 swap（zRAM）、图形缓冲区分配（ION/DMA-BUF）、匿名共享内存（ashmem/memfd）、profiling 工具，以及用于防御漏洞利用的内存安全加固能力。
+内存管理无疑是移动操作系统中最关键的子系统。Android 设备在严苛的物理限制下运行——旗舰机可能有 8--16 GB 的 RAM，但用户通常安装了数十个应用并期望在它们之间瞬间切换。本章将剖析 AOSP 如何编排内存，从硬件页表一直到开发者交互的 Java `onTrimMemory()` 回调。我们将追踪 Linux 内核虚拟内存子系统、用户态低内存杀手守护进程 (lmkd)、cgroup 统计、压缩交换区 (zRAM)、图形缓冲区分配 (ION/DMA-BUF)、匿名共享内存 (ashmem/memfd)、分析工具，以及保护系统免受攻击的面向安全的内存硬化特性。
 
-每一节都会引用 AOSP 源码树中的真实文件。当出现 `system/memory/lmkd/lmkd.cpp` 这样的路径时，它都是相对于 AOSP checkout 根目录而言。
+本章每个小节都引用了位于 AOSP 源码树中的真实文件。当出现类似 `system/memory/lmkd/lmkd.cpp` 的路径时，它是相对于 AOSP 检出根目录的。
 
 ---
 
@@ -10,1035 +10,2031 @@
 
 ### 8.1.1 虚拟内存基础
 
-Android 运行在 Linux 内核之上，内核为每个进程提供独立虚拟地址空间。在 64 位 ARM 设备（AArch64）上，内核通常使用 39 位或 48 位虚拟地址空间，使每个进程最多拥有 256 TB 可寻址内存，远大于实际设备物理内存。CPU 中的 MMU 通过多级页表把虚拟地址转换为物理页框号。
+Android 运行在 Linux 内核之上，内核为每个进程提供独立的虚拟地址空间。在 64 位 ARM 设备 (AArch64) 上，内核通常使用 39 位或 48 位虚拟地址空间，为每个进程提供高达 256 TB 的可寻址内存——这远超任何物理设备所能包含的容量。CPU 中的内存管理单元 (MMU) 通过多级页表将虚拟地址翻译为物理帧号 (PFN)。
 
-```text
-Virtual Address (48-bit example)
+```
+虚拟地址 (48 位示例)
 +--------+--------+--------+--------+-----------+
-| L0 idx | L1 idx | L2 idx | L3 idx | Page Offs |
+| L0 索引 | L1 索引 | L2 索引 | L3 索引 | 页内偏移  |
 | (9 bit)| (9 bit)| (9 bit)| (9 bit)| (12 bit)  |
 +--------+--------+--------+--------+-----------+
          |
          v
-    Page Table Walk (AArch64 上 4 级页表)
+    页表遍历 (AArch64 上为 4 级)
          |
          v
-    Physical Frame Number + Offset = Physical Address
+    物理帧号 + 偏移 = 物理地址
 ```
 
-关键概念如下：
+Android 开发者和平台工程师的关键概念：
 
-| 概念 | 说明 |
+| 概念 | 描述 |
 |---|---|
-| **Page** | 内存管理最小单元，ARM64 通常为 4 KB，部分新 SoC 为 16 KB |
-| **Page Table** | 把虚拟地址映射到物理地址的层级结构 |
-| **TLB** | Translation Lookaside Buffer，硬件中的地址转换缓存 |
-| **Page Fault** | 虚拟地址没有有效映射时触发的 CPU 异常 |
-| **Demand Paging** | 页面直到首次访问才分配，或从 backing store 加载 |
-| **Copy-on-Write (CoW)** | 共享页只有在某个进程写入时才复制，是 `fork()` 和 Zygote 的关键机制 |
+| **页 (Page)** | 内存管理的最小单位，ARM64 上通常为 4 KB (某些新 SoC 支持 16 KB) |
+| **页表 (Page Table)** | 映射虚拟地址到物理地址的分层结构 |
+| **TLB** | 转换检测缓冲区 (Translation Lookaside Buffer)——硬件缓存，存储最近的翻译结果 |
+| **缺页中断 (Page Fault)** | 当虚拟地址没有有效映射时触发的 CPU 异常 |
+| **请求分页 (Demand Paging)** | 页面直到首次访问（次要缺页中断）或从存储介质加载（主要缺页中断）时才分配 |
+| **写时拷贝 (CoW)** | 共享页面仅在某个进程尝试写入时才被复制——这是 `fork()` 和 Zygote 机制的核心 |
 
 ### 8.1.2 进程地址空间布局
 
-每个 Android 进程都通过 `fork()` 从 Zygote 继承初始地址空间。64 位设备上的一般布局如下：
+每个 Android 进程都通过 `fork()` 从 Zygote 继承其初始地址空间。64 位设备上的通用布局遵循以下模式：
 
 ```mermaid
 graph TD
-    A["0x0000000000000000<br/>NULL page (unmapped)"] --> B["Program text (.text)<br/>可执行代码"]
-    B --> C["Read-only data (.rodata)"]
-    C --> D["Initialized data (.data, .bss)"]
-    D --> E["Heap (brk/sbrk)<br/>向上增长"]
-    E --> F["mmap 区域<br/>共享库、文件映射、匿名映射"]
-    F --> G["线程栈<br/>每个线程默认约 1 MB"]
-    G --> H["main thread stack<br/>向下增长"]
-    H --> I["用户态地址空间上限"]
-    I --> J["Kernel / User boundary"]
-    J --> K["Kernel virtual address space"]
+    subgraph "进程虚拟地址空间 (64位)"
+        A["0x0000000000000000<br/>NULL 页 (未映射)"]
+        B["程序文本 (.text)<br/>可执行代码"]
+        C["只读数据 (.rodata)"]
+        D["已初始化数据 (.data, .bss)"]
+        E["堆 (Heap) (brk/sbrk)<br/>向上增长"]
+        F["内存映射区域 (mmap)<br/>共享库、文件映射、<br/>匿名映射"]
+        G["线程栈<br/>(每个默认约 1 MB)"]
+        H["[stack] - 主线程栈<br/>向下增长"]
+        I["0x0000007fffffffff<br/>用户空间上限 (39位 VA)"]
+        J["--- 内核 / 用户边界 ---"]
+        K["0xffffff8000000000<br/>内核虚拟地址空间"]
+    end
+
+    A --> B --> C --> D --> E --> F --> G --> H --> I --> J --> K
+
+    style A fill:#ff6666,color:#000
+    style J fill:#ffcc00,color:#000
+    style K fill:#66aaff,color:#000
 ```
 
-Android 在这个布局中加入了若干专用区域：
+在该布局内，Android 增加了几个专用区域：
 
-- **Dalvik/ART Heap**：Java/Kotlin 对象的托管堆，位于 mmap 区域中。ART 使用 `mmap(MAP_ANONYMOUS)` 创建 large object space、non-moving space 和其他 GC space。
-- **JIT Code Cache**：ART JIT 编译器通过 `mmap(PROT_READ | PROT_EXEC)` 分配可执行内存保存编译方法。
-- **Ashmem / memfd 区域**：用于 Binder 事务、图形缓冲区和跨进程数据共享的共享内存段。
-- **Stack Guard Pages**：每个线程栈边界都有未映射 guard page，用于捕获栈溢出。
+- **Dalvik/ART 堆**：Java/Kotlin 对象的托管堆，位于 mmap 区域。ART 使用 `mmap(MAP_ANONYMOUS)` 来创建大对象空间、非移动空间和其他 GC 空间。
+- **JIT 代码缓存**：ART 的 JIT 编译器通过 `mmap(PROT_READ | PROT_EXEC)` 为编译后的方法分配可执行内存。
+- **Ashmem / memfd 区域**：用于 Binder 事务、图形缓冲区和进程间数据共享的共享内存段。
+- **栈保护页 (Stack Guard Pages)**：每个线程的栈都由未映射的保护页界定，以捕获栈溢出。
 
-### 8.1.3 内核内存与用户态内存
+### 8.1.3 内核 vs. 用户空间内存
 
-内核会保留虚拟地址空间的高地址部分供自身使用。用户态进程不能访问内核内存，这由 MMU 强制执行。该隔离是系统稳定性的基础，应用 bug 不能直接破坏内核数据结构。
+内核保留虚拟地址空间的高端部分供自己使用。用户空间进程无法访问内核内存（由 MMU 强制执行）。这种隔离是系统稳定性的基础——有漏洞的应用无法破坏内核数据结构。
 
-内核内存主要区域如下：
+内核内存分为：
 
 | 区域 | 用途 |
 |---|---|
-| **Linear mapping** | 对所有物理 RAM 的直接映射 |
-| **vmalloc area** | 虚拟连续但物理可离散的分配 |
-| **Module space** | 可加载内核模块 |
-| **fixmap** | 编译期固定虚拟地址，用于特殊硬件 |
-| **PCI I/O space** | 外设 memory-mapped I/O |
+| **线性映射 (Linear mapping)** | 所有物理 RAM 的直接映射（带偏移的等值映射） |
+| **vmalloc 区域** | 虚拟连续但物理分散的分配 |
+| **模块空间 (Module space)** | 可加载内核模块 |
+| **fixmap** | 针对特殊硬件的编译期固定虚拟地址 |
+| **PCI I/O 空间** | 外设设备的内存映射 I/O |
 
-Android 内核配置中常见内存相关特性：
+Android 的内核配置增加了几个重要的内存相关特性：
 
-```text
-CONFIG_ZRAM=y                    # RAM 中的压缩 swap
-CONFIG_MEMCG=y                   # Memory cgroup 支持
-CONFIG_PSI=y                     # Pressure Stall Information
-CONFIG_TRANSPARENT_HUGEPAGE=y    # THP 降低 TLB miss
-CONFIG_KSM=y                     # Kernel Same-page Merging（可选）
-CONFIG_KASAN=y                   # Kernel Address Sanitizer（debug 构建）
-CONFIG_ARM64_MTE=y               # Memory Tagging Extension（ARMv8.5+）
+```
+# 典型的 Android 内核配置摘录
+CONFIG_ZRAM=y                    # RAM 中的压缩交换区
+CONFIG_MEMCG=y                   # 内存 cgroup 支持
+CONFIG_PSI=y                     # 压力停顿信息 (Pressure Stall Information)
+CONFIG_TRANSPARENT_HUGEPAGE=y    # 透明大页，用于减少 TLB 未命中
+CONFIG_KSM=y                     # 内核同页合并 (Kernel Same-page Merging, 可选)
+CONFIG_KASAN=y                   # 内核地址消毒剂 (Kernel Address Sanitizer, 调试构建)
+CONFIG_ARM64_MTE=y               # 内存标签扩展 (Memory Tagging Extension, ARMv8.5+)
 ```
 
-### 8.1.4 Memory Zones 与 NUMA
+### 8.1.4 内存域与 NUMA
 
-Linux 内核把物理内存组织为 zone，例如 `ZONE_DMA`、`ZONE_DMA32`、`ZONE_NORMAL`、`ZONE_MOVABLE`。移动设备通常没有服务器式复杂 NUMA 拓扑，但内核仍使用 node/zone 抽象来描述内存。lmkd 会读取 `/proc/zoneinfo`，根据各 zone 的 watermark 判断系统距离 OOM 的程度。
+Linux 内核将物理内存组织为多个域 (zones)：
 
-### 8.1.5 Zygote 与 Copy-on-Write
+```mermaid
+graph LR
+    subgraph "物理内存域"
+        DMA["ZONE_DMA<br/>(0-16 MB)<br/>遗留 DMA"]
+        DMA32["ZONE_DMA32<br/>(0-4 GB)<br/>32位 DMA"]
+        NORMAL["ZONE_NORMAL<br/>(4+ GB)<br/>通用"]
+        MOVABLE["ZONE_MOVABLE<br/>(可配置)<br/>迁移/热插拔"]
+    end
 
-Zygote 是 Android 内存效率的核心。系统启动时，Zygote 预加载 framework class、resources、常用对象和部分 native 库。应用启动时并不从零创建进程，而是从 Zygote fork。
+    DMA --> DMA32 --> NORMAL --> MOVABLE
+```
+
+lmkd 守护进程通过解析 `/proc/zoneinfo` 来了解域级别的内存压力。`system/memory/lmkd/lmkd.cpp` 中的解析代码定义了这些结构：
+
+```c
+// system/memory/lmkd/lmkd.cpp (第 301-391 行)
+
+/* /proc/zoneinfo 中解析的字段 */
+enum zoneinfo_zone_field {
+    ZI_ZONE_NR_FREE_PAGES = 0,
+    ZI_ZONE_MIN,
+    ZI_ZONE_LOW,
+    ZI_ZONE_HIGH,
+    ZI_ZONE_PRESENT,
+    ZI_ZONE_NR_FREE_CMA,
+    ZI_ZONE_FIELD_COUNT
+};
+
+struct zoneinfo_zone {
+    union zoneinfo_zone_fields fields;
+    int64_t protection[MAX_NR_ZONES];
+    int64_t max_protection;
+};
+
+struct zoneinfo {
+    int node_count;
+    struct zoneinfo_node nodes[MAX_NR_NODES];
+    int64_t totalreserve_pages;
+    int64_t total_inactive_file;
+    int64_t total_active_file;
+};
+```
+
+`totalreserve_pages` 字段是每个域的 `max_protection + high watermark` 之和，代表内核为自身操作保留的最小内存量。这对 lmkd 计算可用内存至关重要。
+
+### 8.1.5 Zygote 与写时拷贝
+
+Zygote 进程是 Android 内存效率的核心。每个应用进程都从 Zygote fork 而来，Zygote 预加载了整个 Android 框架（约 100+ MB 的类库、资源和原生代码）。得益于写时拷贝 (CoW)，在修改之前，这些页面在物理上由 Zygote 和每个 fork 出的应用进程共享。
 
 ```mermaid
 graph TD
-    Z["Zygote<br/>预加载 classes/resources"] --> A1["App A fork"]
-    Z --> A2["App B fork"]
-    Z --> A3["App C fork"]
-    SHARED["共享只读页<br/>framework code/resources"]
-    COW["写入时 CoW<br/>私有页"]
-    Z --> SHARED
-    A1 --> SHARED
-    A2 --> SHARED
-    A3 --> SHARED
-    A1 --> COW
+    subgraph "Zygote Fork 与 CoW"
+        Zygote["Zygote 进程<br/>加载约 150 MB<br/>框架类、引导镜像、共享库"]
+
+        App1["应用进程 1<br/>共享 Zygote 页面<br/>+ 30 MB 私有"]
+        App2["应用进程 2<br/>共享 Zygote 页面<br/>+ 45 MB 私有"]
+        App3["应用进程 3<br/>共享 Zygote 页面<br/>+ 20 MB 私有"]
+    end
+
+    subgraph "物理内存"
+        Shared["共享页面 (约 100 MB)<br/>框架类、引导镜像<br/>(只读，全进程共享)"]
+        CoW1["CoW 页面 (应用 1)<br/>修改后的框架数据<br/>约 10 MB"]
+        CoW2["CoW 页面 (应用 2)<br/>修改后的框架数据<br/>约 15 MB"]
+        CoW3["CoW 页面 (应用 3)<br/>修改后的框架数据<br/>约 5 MB"]
+        Private1["私有页面 (应用 1)<br/>应用专用堆<br/>约 20 MB"]
+        Private2["私有页面 (应用 2)<br/>应用专用堆<br/>约 30 MB"]
+        Private3["私有页面 (应用 3)<br/>应用专用堆<br/>约 15 MB"]
+    end
+
+    Zygote -->|"fork()"| App1
+    Zygote -->|"fork()"| App2
+    Zygote -->|"fork()"| App3
+
+    App1 --> Shared
+    App2 --> Shared
+    App3 --> Shared
+
+    App1 --> CoW1
+    App1 --> Private1
+    App2 --> CoW2
+    App2 --> Private2
+    App3 --> CoW3
+    App3 --> Private3
+
+    style Shared fill:#44cc44,color:#000
 ```
 
-只要应用不写入共享页，这些页就在所有 app 之间共享。写入发生时，内核才复制页面。这让 Android 可以在大量进程之间共享 framework 代码和只读数据。
+如果没有 Zygote 和 CoW，这三个应用中的每一个都需要一份独立的框架副本，从而使共享代码的内存消耗翻三倍。有了 CoW，物理成本为：
+
+- **无 CoW**：3 x 150 MB = 450 MB 框架 + 95 MB 私有 = 545 MB 总量
+- **有 CoW**：100 MB 共享 + 30 MB CoW 页面 + 95 MB 私有 = 225 MB 总量
+
+这种差异在 Android 设备上通常运行的 20-40 个进程中会被成倍放大。
 
 ### 8.1.6 内存回收机制
 
-Linux 内核有多层回收机制：
+当压力增加时，内核采用几种机制来回收内存：
 
-- **kswapd**：后台回收线程，在内存低于 watermark 时异步回收页面。
-- **direct reclaim**：分配路径上同步回收，通常意味着内存压力更严重。
-- **page cache reclaim**：丢弃可从文件重新读取的 clean cache 页。
-- **swap out**：把匿名页换出到 zRAM。
-- **compaction**：整理物理内存，为高阶页分配创造连续空间。
+```mermaid
+flowchart TD
+    Pressure["检测到内存压力"] --> Watermark{"处于哪个水位线以下?"}
 
-lmkd 观察 PSI、vmstat、zoneinfo 和 meminfo，当系统回收效率不足时主动杀死低优先级进程。
+    Watermark -->|"HIGH"| kswapd["kswapd (后台)<br/>扫描不活跃列表<br/>驱逐文件页<br/>交换匿名页"]
 
-### 8.1.7 Page Cache
+    Watermark -->|"LOW"| DirectRecl["直接回收 (同步、阻塞)<br/>分配进程等待<br/>扫描所有 LRU 列表"]
 
-Page cache 用于缓存文件内容，是 Linux 内存系统的重要部分。应用读取 APK、dex、so、图片和数据库文件时，数据通常进入 page cache。page cache 可以在内存压力下回收，因为 clean file-backed 页面可从磁盘重新读取。
+    Watermark -->|"MIN"| OOM["OOM Killer (最后手段)<br/>内核选择受害者<br/>基于 oom_score"]
 
-Android 内存分析中，区分 anonymous memory、file-backed memory、page cache、shared clean 和 private dirty 很重要。`dumpsys meminfo`、`showmap` 和 `/proc/[pid]/smaps` 都围绕这些概念组织输出。
+    kswapd --> FileEvict["文件页驱逐<br/>(干净页：丢弃<br/>脏页：先写回)"]
+    kswapd --> AnonSwap["匿名页交换<br/>(压缩至 zRAM)"]
+    kswapd --> SlabShrink["Slab 收缩<br/>(dentry/inode 缓存)"]
+
+    DirectRecl --> FileEvict
+    DirectRecl --> AnonSwap
+    DirectRecl --> SlabShrink
+
+    Note1["Android 特有：lmkd 在<br/>需要 OOM killer 之前<br/>杀死进程"]
+
+    style OOM fill:#cc2222,color:#fff
+    style Note1 fill:#ffcc00,color:#000
+```
+
+页面回收算法使用两个关键指标：
+
+- **不活跃比例 (Inactive ratio)**：页面根据访问模式从活跃列表降级到不活跃列表。最近未被访问的页面更有可能被驱逐。
+- **扫描优先级 (Scan priority)**：优先级越高，每个回收周期扫描的页面越多。直接回收使用比 kswapd 更高的优先级。
+
+### 8.1.7 页面缓存 (Page Cache)
+
+Linux 页面缓存将最近读取的文件数据保留在内存中。在 Android 上，这尤为重要，原因如下：
+
+1. **应用启动速度**取决于页面缓存中是否存在 APK 内容（DEX、资源、原生库）。
+2. **页面缓存是可驱逐的**——内核在内存压力下会回收这些页面，这就是为什么文件缓存大小会影响 lmkd 的杀进程决策。
+3. **活跃 vs. 不活跃列表**——内核维护 LRU 列表以决定优先驱逐哪些页面。lmkd 通过 `/proc/meminfo` 读取这些信息：
+
+```c
+// system/memory/lmkd/lmkd.cpp (第 394-441 行)
+enum meminfo_field {
+    MI_NR_FREE_PAGES = 0,
+    MI_CACHED,
+    MI_SWAP_CACHED,
+    MI_BUFFERS,
+    MI_SHMEM,
+    MI_UNEVICTABLE,
+    MI_TOTAL_SWAP,
+    MI_FREE_SWAP,
+    MI_ACTIVE_ANON,
+    MI_INACTIVE_ANON,
+    MI_ACTIVE_FILE,
+    MI_INACTIVE_FILE,
+    MI_SRECLAIMABLE,
+    MI_SUNRECLAIM,
+    MI_KERNEL_STACK,
+    MI_PAGE_TABLES,
+    // ...
+    MI_FIELD_COUNT
+};
+```
 
 ---
 
-## 8.2 Low Memory Killer Daemon（lmkd）
+## 8.2 低内存杀手守护进程 (lmkd)
+
+低内存杀手守护进程是核心用户态组件，负责在内存压力下保持 Android 系统响应。当物理内存不足时，lmkd 会选择并杀死进程以释放内存，以免系统进入不可恢复的内存溢出 (OOM) 状态。
+
+**源码目录**：`system/memory/lmkd/`
+
+| 文件 | 用途 |
+|---|---|
+| `lmkd.cpp` | 主守护进程实现 (约 3400 行) |
+| `lmkd.rc` | Init 服务定义 |
+| `lmkd.h` (位于 `include/`) | 命令协议定义 |
+| `reaper.cpp` / `reaper.h` | 使用 `process_mrelease()` 的异步进程收割 |
+| `watchdog.cpp` / `watchdog.h` | 检测 lmkd 挂起的看门狗定时器 |
+| `statslog.cpp` / `statslog.h` | 杀死事件的统计日志 |
+| `libpsi/psi.cpp` | PSI (压力停顿信息) 监控接口 |
 
 ### 8.2.1 历史背景：从内核驱动到用户态守护进程
 
-早期 Android 使用内核内 Low Memory Killer 驱动。现代 Android 已迁移到用户态 `lmkd`，它基于 PSI 和更丰富的进程状态做决策。用户态实现更灵活，可以结合 ActivityManager 的 OOM adjustment、swap 状态、thrashing 指标、vendor hook 和 statsd 记录。
+Android 最初使用位于 `drivers/staging/android/lowmemorykiller.c` 的内核内低内存杀手 (LMK) 驱动。该内核驱动通过挂接到内核的 shrink 回调机制运行。当内存低于配置的阈值时，驱动会遍历进程列表并杀死 `oom_adj_score` 超过阈值的最高分进程。
 
-核心源码位于：
+迁移到用户态守护进程 (lmkd) 的原因有几个：
 
-```text
-system/memory/lmkd/lmkd.cpp
-system/memory/lmkd/lmkd.rc
-system/memory/lmkd/reaper.cpp
-system/memory/lmkd/watchdog.cpp
-system/memory/lmkd/libpsi/psi.cpp
+1. **Staging 驱动移除**：内核社区从 staging 树中拒绝了 LMK 驱动。
+2. **灵活性**：用户态守护进程可以独立于内核进行更新。
+3. **PSI 集成**：现代内核中的压力停顿信息 (PSI) 框架提供了比旧的 vmpressure 事件更好的内存压力信号。
+4. **更好的杀进程策略**：用户态可以访问更多进程元数据。
+
+代码仍然会检查遗留的内核内接口：
+
+```c
+// system/memory/lmkd/lmkd.cpp (第 86-87, 155 行)
+#define INKERNEL_MINFREE_PATH "/sys/module/lowmemorykiller/parameters/minfree"
+#define INKERNEL_ADJ_PATH "/sys/module/lowmemorykiller/parameters/adj"
+
+/* 如果没有内存压力事件，默认使用旧的内核内接口 */
+static bool use_inkernel_interface = true;
+static bool has_inkernel_module;
 ```
 
-### 8.2.2 `lmkd` 服务配置
+### 8.2.2 lmkd 服务配置
 
-`lmkd` 由 init 启动，作为系统内存压力管理守护进程运行。它监听来自 ActivityManagerService 的进程优先级更新，监控 PSI 和内核内存指标，并在必要时执行 kill。
+该守护进程由 Android 的 init系统通过其 `.rc` 文件启动：
+
+```
+# system/memory/lmkd/lmkd.rc (第 1-8 行)
+service lmkd /system/bin/lmkd
+    class core
+    user lmkd
+    group lmkd system readproc
+    capabilities DAC_OVERRIDE KILL IPC_LOCK SYS_NICE SYS_RESOURCE
+    critical
+    socket lmkd seqpacket+passcred 0660 system system
+    task_profiles ServiceCapacityLow
+```
+
+该配置的关键点：
+
+- **`class core`**：lmkd 在核心服务类中启动，意味着它在启动早期运行。
+- **`user lmkd`**：以专用用户身份运行，实现安全隔离。
+- **`capabilities`**：需要 `CAP_KILL` 来终止进程，`CAP_DAC_OVERRIDE` 来写入 `/proc/[pid]/oom_score_adj`，以及 `CAP_SYS_RESOURCE` 进行资源调整。
+- **`critical`**：如果 lmkd 崩溃，系统将重启（它就是这么核心）。
+- **`socket lmkd`**：创建一个 Unix 域套接字，用于与 ActivityManagerService 通信。
+- **重新初始化触发器**：`.rc` 文件包含属性触发器（第 10-72 行），当通过 `persist.device_config.lmkd_native.*` 属性更改实验性标志时，会重新初始化 lmkd。
 
 ### 8.2.3 通信协议
 
-AMS 与 lmkd 之间通过 socket 通信。AMS 会发送进程注册、进程移除、OOM score 更新等消息。lmkd 用这些信息维护 pid 到 oom_adj、uid、进程名、pidfd 等状态的映射。
+lmkd 通过 Unix 域套接字与框架（主要是 ActivityManagerService 中的 `ProcessList.java`）通信。协议定义在 `include/lmkd.h` 中：
 
-常见消息语义包括：
+```c
+// system/memory/lmkd/include/lmkd.h (第 29-42 行)
+enum lmk_cmd {
+    LMK_TARGET = 0,         /* 将 minfree 与 oom_adj_score 关联 */
+    LMK_PROCPRIO,           /* 注册一个进程并设置其 oom_adj_score */
+    LMK_PROCREMOVE,         /* 注销一个进程 */
+    LMK_PROCPURGE,          /* 清除所有已注册进程 */
+    LMK_GETKILLCNT,         /* 获取杀死次数 */
+    LMK_SUBSCRIBE,          /* 订阅异步事件 */
+    LMK_PROCKILL,           /* 进程被杀时向订阅客户端发送的主动消息 */
+    LMK_UPDATE_PROPS,       /* 重新初始化属性 */
+    LMK_STAT_KILL_OCCURRED, /* 用于 statsd 日志的主动消息 */
+    LMK_START_MONITORING,   /* 如果之前跳过了，则启动 psi 监控 */
+    LMK_BOOT_COMPLETED,     /* 通知 LMKD 启动已完成 */
+    LMK_PROCS_PRIO,         /* 注册多个进程并设置相同的 oom_adj_score */
+};
+```
 
-- 添加或更新进程记录。
-- 删除已退出进程。
-- 更新 `oom_score_adj`。
-- 通知 lmkd 某些系统状态变化。
-- lmkd 回报 kill 事件。
-
-### 8.2.4 OOM Adjustment 分数
-
-`oom_score_adj` 表示进程重要性，数值越高越容易被杀。AMS 根据进程生命周期、组件状态、用户可见性和服务绑定关系计算该分数。
-
-| 类别 | 典型 adj | 含义 |
-|------|----------|------|
-| System | 负值 | system_server、native system daemon |
-| Persistent | 负值 | 常驻系统进程 |
-| Foreground | 0 | 当前前台进程 |
-| Perceptible | 200 左右 | 用户可感知进程，如音乐播放 |
-| Service | 500 左右 | 后台服务 |
-| Previous | 700 左右 | 上一个前台应用 |
-| Cached | 900+ | 缓存后台进程，优先牺牲 |
-
-lmkd 通常从最高 adj 开始选择 victim，优先杀 cached/background 进程，尽量保护前台和用户可感知进程。
-
-### 8.2.5 基于 PSI 的 Kill 触发
-
-PSI（Pressure Stall Information）提供 CPU、memory、IO stall 的时间比例。lmkd 通过 `/proc/pressure/memory` 监听内存压力事件。相比只看 free memory，PSI 更能反映用户可感知卡顿，因为它直接衡量任务因内存回收而停顿的时间。
-
-PSI 事件通常分为：
-
-- **some**：至少有一个任务因内存压力停顿。
-- **full**：所有非 idle 任务都被内存压力阻塞。
-
-critical PSI 事件会触发更激进的 kill 策略。
-
-### 8.2.6 Kill 决策逻辑
-
-lmkd 决策会综合以下输入：
-
-- 当前 PSI 事件级别。
-- 上一次 kill 后系统是否恢复。
-- free pages 与 zone watermark。
-- swap 可用量与 swap utilization。
-- workingset refault / thrashing 比例。
-- direct reclaim 与 kswapd 扫描状态。
-- GPU memory、file cache、anonymous memory 等额外指标。
-
-决策结果是一个 kill reason 和最小 `oom_score_adj`。然后 lmkd 在候选进程中选择 victim。
-
-### 8.2.7 完整 Kill 决策状态机
+正常运行期间的消息流：
 
 ```mermaid
-graph TD
-    Start["PSI event / memory pressure"] --> Read["读取 meminfo/vmstat/zoneinfo"]
-    Read --> Calc["计算 watermark、thrashing、swap util"]
-    Calc --> C1{"上次 kill 后仍低于 LOW?"}
-    C1 -->|"Yes"| R1["PRESSURE_AFTER_KILL"]
-    C1 -->|"No"| C2{"Critical PSI?"}
-    C2 -->|"Yes"| R2["NOT_RESPONDING"]
-    C2 -->|"No"| C3{"Low swap + thrashing?"}
-    C3 -->|"Yes"| R3["LOW_SWAP_AND_THRASHING"]
-    C3 -->|"No"| C4{"Low memory + swap pressure?"}
-    C4 -->|"Yes"| R4["LOW_MEM_AND_SWAP"]
-    C4 -->|"No"| C5{"Direct reclaim stuck?"}
-    C5 -->|"Yes"| R5["DIRECT_RECL_STUCK"]
-    C5 -->|"No"| N["No kill"]
-    R1 --> Kill["find_and_kill_process"]
+sequenceDiagram
+    participant AMS as ActivityManagerService (ProcessList.java)
+    participant LMKD as lmkd 守护进程
+    participant Kernel as Linux 内核
+
+    AMS->>LMKD: LMK_TARGET (设置 minfree 级别)
+    AMS->>LMKD: LMK_PROCPRIO (注册进程, 设置 oom_adj)
+    AMS->>LMKD: LMK_SUBSCRIBE (订阅杀死事件)
+
+    Note over Kernel: 内存压力增加
+
+    Kernel-->>LMKD: PSI 事件 (epoll 通知)
+    LMKD->>LMKD: 解析 /proc/meminfo, /proc/zoneinfo, /proc/vmstat
+    LMKD->>LMKD: 计算内存状态, 检查阈值
+    LMKD->>Kernel: SIGKILL 目标进程 (通过 pidfd_send_signal)
+    LMKD->>AMS: LMK_PROCKILL (通知杀死事件)
+    LMKD->>AMS: LMK_STAT_KILL_OCCURRED (statsd 杀死统计)
+
+    AMS->>LMKD: LMK_PROCREMOVE (进程已死亡)
+```
+
+每个数据包都以网络字节序的 `int` 命令代码开头，后跟命令专用字段。例如，`LMK_PROCPRIO` 包携带：
+
+```c
+// system/memory/lmkd/include/lmkd.h (第 106-113 行)
+struct lmk_procprio {
+    pid_t pid;
+    uid_t uid;
+    int oomadj;
+    enum proc_type ptype;
+};
+```
+
+`LMK_PROCS_PRIO` 命令（第 41 行）是一项优化，允许在单个数据包中批量更新多个进程优先级，从而在许多进程优先级同时变化时（例如 Activity 切换期间）减少套接字往返。
+
+### 8.2.4 OOM 调整分值 (OOM Adjustment Scores)
+
+Android 中的每个进程都有一个表示其重要性的 OOM 调整分值 (`oom_adj_score`)。分值越低表示越重要。lmkd 将此值写入 `/proc/[pid]/oom_score_adj`，并据此决定优先杀死哪些进程。
+
+分值范围定义在 `frameworks/base/services/core/java/com/android/server/am/ProcessList.java` 中：
+
+| 常量 | 分值 | 进程类型 |
+|---|---|---|
+| `NATIVE_ADJ` | -1000 | 原生系统守护进程 |
+| `SYSTEM_ADJ` | -900 | system_server |
+| `PERSISTENT_PROC_ADJ` | -800 | 持久化系统进程 |
+| `PERSISTENT_SERVICE_ADJ` | -700 | 持久化服务 |
+| `FOREGROUND_APP_ADJ` | 0 | 当前可见的前台应用 |
+| `VISIBLE_APP_ADJ` | 100 | 可见但未聚焦的 Activity |
+| `PERCEPTIBLE_APP_ADJ` | 200 | 用户可感知的进程（例如播放音频） |
+| `PERCEPTIBLE_LOW_APP_ADJ` | 250 | 低优先级可感知进程 |
+| `BACKUP_APP_ADJ` | 300 | 正在执行备份 |
+| `HEAVY_WEIGHT_APP_ADJ` | 400 | 重量级后台进程 |
+| `SERVICE_ADJ` | 500 | 正在运行服务 |
+| `HOME_APP_ADJ` | 600 | Launcher 应用 |
+| `PREVIOUS_APP_ADJ` | 700 | 上一个前台应用 |
+| `SERVICE_B_ADJ` | 800 | B 列表服务 |
+| `CACHED_APP_MIN_ADJ` | 900 | 缓存（空）进程最小分值 |
+| `CACHED_APP_LMK_FIRST_ADJ` | 950 | 优先杀死的缓存进程 |
+| `CACHED_APP_MAX_ADJ` | 999 | 缓存进程最大分值 |
+
+```mermaid
+graph LR
+    subgraph "OOM 调整分值频谱"
+        direction LR
+        A["-1000<br/>NATIVE"] --> B["-900<br/>SYSTEM"] --> C["-800<br/>PERSISTENT"]
+        C --> D["0<br/>FOREGROUND"] --> E["100<br/>VISIBLE"]
+        E --> F["200<br/>PERCEPTIBLE"] --> G["500<br/>SERVICE"]
+        G --> H["700<br/>PREVIOUS"] --> I["900-999<br/>CACHED"]
+    end
+
+    style A fill:#00aa00,color:#fff
+    style D fill:#88cc00,color:#000
+    style I fill:#ff4444,color:#fff
+```
+
+lmkd 维护一个按 OOM 分值排序的双向链表，以快速找到分值最高（最不重要）的进程：
+
+```c
+// system/memory/lmkd/lmkd.cpp (第 520-534, 541-552)
+struct proc {
+    struct adjslot_list asl;
+    int pid;
+    int pidfd;
+    uid_t uid;
+    int oomadj;
+    pid_t reg_pid;
+    bool valid;
+    struct proc *pidhash_next;
+};
+
+#define PIDHASH_SZ 1024
+static struct proc *pidhash[PIDHASH_SZ];
+#define pid_hashfn(x) ((((x) >> 8) ^ (x)) & (PIDHASH_SZ - 1))
+
+#define ADJTOSLOT(adj) ((adj) + -OOM_SCORE_ADJ_MIN)
+#define ADJTOSLOT_COUNT (ADJTOSLOT(OOM_SCORE_ADJ_MAX) + 1)
+static struct adjslot_list procadjslot_list[ADJTOSLOT_COUNT];
+```
+
+`procadjslot_list` 是一个包含 2001 个槽位的数组（从 -1000 到 +1000），每个槽位都是该 OOM 分值的进程链表。通过从第 2000 个槽位开始向后扫描，可以实现对最高分进程的 O(1) 查找。
+
+### 8.2.5 基于 PSI 的杀进程触发器
+
+现代 lmkd 使用内核的压力停顿信息 (PSI) 框架作为杀进程决策的主要触发器。PSI 衡量任务因等待内存资源而停顿的时间百分比。
+
+PSI 接口通过 `/proc/pressure/memory` 访问，报告内容如下：
+
+```
+some avg10=0.00 avg60=0.00 avg300=0.00 total=0
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+```
+
+- **`some`**：至少有一个任务在等待内存而停顿。
+- **`full`**：所有非空闲任务同时因内存而停顿。
+
+lmkd 在三个压力级别注册 PSI 监控器：
+
+```c
+// system/memory/lmkd/lmkd.cpp (第 158-170, 226-230 行)
+enum vmpressure_level {
+    VMPRESS_LEVEL_LOW = 0,
+    VMPRESS_LEVEL_MEDIUM,
+    VMPRESS_LEVEL_CRITICAL,
+    VMPRESS_LEVEL_COUNT
+};
+
+static struct psi_threshold psi_thresholds[VMPRESS_LEVEL_COUNT] = {
+    { PSI_SOME, 70 },    /* 1秒内有 70ms 处于部分停顿 */
+    { PSI_SOME, 100 },   /* 1秒内有 100ms 处于部分停顿 */
+    { PSI_FULL, 70 },    /* 1秒内有 70ms 处于完全停顿 */
+};
+```
+
+PSI 监控库 (`system/memory/lmkd/libpsi/psi.cpp`) 向内核注册触发器：
+
+```c
+// system/memory/lmkd/libpsi/psi.cpp (第 36-83 行)
+int init_psi_monitor(enum psi_stall_type stall_type, int threshold_us,
+                     int window_us, enum psi_resource resource) {
+    int fd;
+    char buf[256];
+
+    fd = TEMP_FAILURE_RETRY(open(psi_resource_file[resource],
+                                 O_WRONLY | O_CLOEXEC));
+    if (fd < 0) {
+        ALOGE("No kernel psi monitor support (errno=%d)", errno);
+        return -1;
+    }
+
+    // 写入触发器："some 70000 1000000" 意味着
+    // "在 1000ms 窗口内 'some' 停顿超过 70ms 时发出通知"
+    snprintf(buf, sizeof(buf), "%s %d %d",
+             stall_type_name[stall_type], threshold_us, window_us);
+
+    write(fd, buf, strlen(buf) + 1);
+    return fd;  // fd 可以被添加到 epoll 中
+}
+```
+
+返回的文件描述符被添加到 lmkd 的 epoll 集中。当内核检测到内存停顿时间在窗口内超过阈值时，会在 fd 上触发一个 `EPOLLPRI` 事件。
+
+### 8.2.6 杀进程决策逻辑
+
+当 PSI 事件触发时，lmkd 进入其杀进程决策循环。该逻辑考虑多个因素：
+
+```mermaid
+flowchart TD
+    A[收到 PSI 事件] --> B["解析 /proc/meminfo<br/>/proc/zoneinfo<br/>/proc/vmstat"]
+    B --> C{"检查杀进程<br/>超时"}
+    C -->|仍在等待| D["跳过 - 上次杀进程<br/>尚未生效"]
+    C -->|超时已过| E{"评估内存<br/>状况"}
+
+    E --> F{"是否存在抖动 (Thrashing)?<br/>workingset_refault<br/>变化 > 阈值"}
+    E --> G{"Swap 是否过低?<br/>free_swap < 阈值"}
+    E --> H{"内存是否过低?<br/>free < minfree 级别"}
+    E --> I{"直接回收 (Direct reclaim)<br/>是否挂起?"}
+
+    F --> J["根据压力级别<br/>确定 min_score_adj"]
+    G --> J
+    H --> J
+    I --> J
+
+    J --> K[find_and_kill_process]
+    K --> L{是否杀死最重任务 (kill_heaviest_task)?}
+    L -->|是| M["杀死 min_score_adj 及以上<br/>RSS 最高的进程"]
+    L -->|否| N["杀死 min_score_adj 及以上<br/>oom_adj 最高的进程"]
+
+    M --> O["通过 pidfd_send_signal<br/>发送 SIGKILL"]
+    N --> O
+    O --> P["收割者线程调用<br/>process_mrelease"]
+    P --> Q["记录杀死统计,<br/>通知 AMS"]
+```
+
+代码中列举了杀进程原因：
+
+```c
+// system/memory/lmkd/statslog.h (第 69-85 行)
+enum kill_reasons {
+    NONE = -1,
+    PRESSURE_AFTER_KILL = 0,
+    NOT_RESPONDING,
+    LOW_SWAP_AND_THRASHING,
+    LOW_MEM_AND_SWAP,
+    LOW_MEM_AND_THRASHING,
+    DIRECT_RECL_AND_THRASHING,
+    LOW_MEM_AND_SWAP_UTIL,
+    LOW_FILECACHE_AFTER_THRASHING,
+    LOW_MEM,
+    DIRECT_RECL_STUCK,
+    KILL_REASON_COUNT
+};
+```
+
+可用内存的计算非常细致。lmkd 计算“易用可用”内存，其中考虑了文件缓存的驱逐能力和交换压缩：
+
+```c
+// system/memory/lmkd/lmkd.cpp (第 1969-1984 行)
+mi->field.easy_available = mi->field.nr_free_pages;
+if (relaxed_available_memory && swap_compression_ratio) {
+    mi->field.easy_available += mi->field.active_file
+                              + mi->field.inactive_file;
+    mi->field.easy_available -= mi->field.dirty;
+
+    int64_t anon_pages = mi->field.active_anon + mi->field.inactive_anon;
+    mi->field.easy_available +=
+        (swap_compression_ratio - swap_compression_ratio_div)
+        * anon_pages / swap_compression_ratio;
+} else {
+    mi->field.easy_available += mi->field.inactive_file;
+}
+```
+
+该计算识别出：
+
+- 空闲页面是立即可用的。
+- 文件备份页面（活跃和不活跃）可以通过驱逐来回收内存。
+- 脏页需要先写回，因此被减去。
+- 匿名页可以交换，但 zRAM 压缩意味着它们只能释放其原始大小的 `(1 - 1/压缩率)`。
+
+### 8.2.7 完整的杀进程决策状态机
+
+`lmkd.cpp` 中的完整 PSI 事件处理函数 (`__mp_event_psi`) 实现了一个复杂的状态机，在决定是否杀进程之前评估多个内存条件：
+
+```c
+// system/memory/lmkd/lmkd.cpp (第 2729-2999 行, 略有删减)
+static void __mp_event_psi(enum event_source source,
+                           union psi_event_data data,
+                           uint32_t events,
+                           struct polling_params *poll_params) {
+    static int64_t init_ws_refault;
+    static int64_t prev_workingset_refault;
+    static int64_t base_file_lru;
+    static bool killing;
+    static int thrashing_limit = thrashing_limit_pct;
+    static struct wakeup_info wi;
+    static int max_thrashing = 0;
+
+    union meminfo mi;
+    union vmstat vs;
+    struct psi_data psi_data;
+    int64_t thrashing = 0;
+    bool swap_is_low = false;
+    enum kill_reasons kill_reason = NONE;
+    // ...
+
+    // 步骤 1：基于待处理杀进程的速率限制
+    bool kill_pending = is_kill_pending();
+    if (kill_pending && (kill_timeout_ms == 0 ||
+        get_time_diff_ms(&last_kill_tm, &curr_tm)
+            < static_cast<long>(kill_timeout_ms))) {
+        wi.skipped_wakeups++;
+        goto no_kill;
+    }
+
+    // 步骤 2：解析所有内存状态
+    vmstat_parse(&vs);
+    meminfo_parse(&mi);
+
+    // 步骤 3：计算抖动百分比
+    thrashing = (workingset_refault_file - init_ws_refault) * 100
+                / (base_file_lru + 1);
+    thrashing += prev_thrash_growth;
+
+    // 步骤 4：检查交换水平
+    swap_is_low = get_free_swap(&mi) < swap_low_threshold;
+
+    // 步骤 5：识别回收状态
+    in_direct_reclaim = vs.field.pgscan_direct != init_pgscan_direct;
+    in_kswapd_reclaim = vs.field.pgscan_kswapd != init_pgscan_kswapd;
+
+    // 步骤 6：检查水位线
+    wmark = get_lowest_watermark(&mi, &watermarks);
+
+    // 步骤 7：基于组合状态确定杀进程原因
+    if (cycle_after_kill && wmark < WMARK_LOW) {
+        kill_reason = PRESSURE_AFTER_KILL;
+    } else if (level == VMPRESS_LEVEL_CRITICAL) {
+        kill_reason = NOT_RESPONDING;
+    } else if (swap_is_low && thrashing > thrashing_limit_pct) {
+        kill_reason = LOW_SWAP_AND_THRASHING;
+    } else if (swap_is_low && wmark < WMARK_HIGH) {
+        kill_reason = LOW_MEM_AND_SWAP;
+    } else if (reclaim == DIRECT_RECLAIM && thrashing > thrashing_limit) {
+        kill_reason = DIRECT_RECL_AND_THRASHING;
+    } // ... 更多条件
+}
+```
+
+完整的杀进程决策树：
+
+```mermaid
+flowchart TD
+    Start[PSI 事件] --> ParseState["解析 meminfo,<br/>vmstat, zoneinfo"]
+    ParseState --> KillPending{"上次杀进程<br/>是否仍在挂起?"}
+    KillPending -->|是, 在超时内| Skip[跳过此事件]
+    KillPending -->|否 / 超时已过| CalcState["计算:<br/>- 抖动 %<br/>- Swap 利用率<br/>- 水位线级别<br/>- 回收状态"]
+
+    CalcState --> Cond1{"上次杀进程<br/>且水位线<br/>低于 LOW?"}
+    Cond1 -->|是| R1["PRESSURE_AFTER_KILL<br/>来自配置的 min_adj"]
+    Cond1 -->|否| Cond2{"是否为 Critical<br/>PSI 事件?"}
+
+    Cond2 -->|是| R2["NOT_RESPONDING<br/>min_adj = 0"]
+    Cond2 -->|否| Cond3{"Swap 低且<br/>抖动 > 限制?"}
+
+    Cond3 -->|是| R3["LOW_SWAP_AND_THRASHING<br/>min_adj = 0"]
+    Cond3 -->|否| Cond4{"Swap 低且<br/>低水位线?"}
+
+    Cond4 -->|是| R4["LOW_MEM_AND_SWAP<br/>min_adj = 0"]
+    Cond4 -->|否| Cond5{"存在抖动且<br/>低水位线?"}
+
+    Cond5 -->|是| R5["LOW_MEM_AND_THRASHING<br/>min_adj = 0"]
+    Cond5 -->|否| Cond6{"直接回收<br/>且存在抖动?"}
+
+    Cond6 -->|是| R6["DIRECT_RECL_AND_THRASHING<br/>基于 Swap 利用率的 min_adj"]
+    Cond6 -->|否| Cond7{"Swap 利用率<br/>是否过高?"}
+
+    Cond7 -->|是| R7["LOW_MEM_AND_SWAP_UTIL<br/>min_adj = 0"]
+    Cond7 -->|否| Cond8{"直接回收<br/>是否卡住?"}
+
+    Cond8 -->|是| R8["DIRECT_RECL_STUCK<br/>min_adj = 0"]
+    Cond8 -->|否| NoKill[无需杀进程]
+
+    R1 --> Kill[find_and_kill_process]
     R2 --> Kill
     R3 --> Kill
     R4 --> Kill
     R5 --> Kill
+    R6 --> Kill
+    R7 --> Kill
+    R8 --> Kill
+
+    style R1 fill:#cc4444,color:#fff
+    style R2 fill:#cc4444,color:#fff
+    style R3 fill:#cc4444,color:#fff
+    style R4 fill:#cc4444,color:#fff
+    style R5 fill:#cc4444,color:#fff
+    style R6 fill:#cc4444,color:#fff
+    style R7 fill:#cc4444,color:#fff
+    style R8 fill:#cc4444,color:#fff
+    style NoKill fill:#44cc44,color:#000
+    style Skip fill:#cccc44,color:#000
 ```
 
-### 8.2.8 Watermark 计算
+### 8.2.8 水位线计算
 
-lmkd 通过 zone watermark 判断系统距离 OOM 的程度：
+lmkd 计算域水位线以了解系统离 OOM 还有多远：
 
 ```c
+// system/memory/lmkd/lmkd.cpp (第 2649-2701 行)
 enum zone_watermark {
-    WMARK_MIN = 0,   // 低于 min：direct reclaim，OOM 风险高
+    WMARK_MIN = 0,   // 低于 min：直接回收，存在 OOM 风险
     WMARK_LOW,       // 低于 low：kswapd 活跃
-    WMARK_HIGH,      // 低于 high：kswapd 可能开始工作
-    WMARK_NONE       // 高于所有 watermark：健康
+    WMARK_HIGH,      // 低于 high：kswapd 可能很快启动
+    WMARK_NONE       // 高于所有水位线：健康
 };
+
+struct zone_watermarks {
+    long high_wmark;
+    long low_wmark;
+    long min_wmark;
+};
+
+void calc_zone_watermarks(struct zoneinfo *zi,
+                          struct zone_watermarks *watermarks) {
+    memset(watermarks, 0, sizeof(struct zone_watermarks));
+
+    for (int node_idx = 0; node_idx < zi->node_count; node_idx++) {
+        struct zoneinfo_node *node = &zi->nodes[node_idx];
+        for (int zone_idx = 0; zone_idx < node->zone_count; zone_idx++) {
+            struct zoneinfo_zone *zone = &node->zones[zone_idx];
+            if (!zone->fields.field.present) continue;
+
+            watermarks->high_wmark += zone->max_protection
+                                    + zone->fields.field.high;
+            watermarks->low_wmark  += zone->max_protection
+                                    + zone->fields.field.low;
+            watermarks->min_wmark  += zone->max_protection
+                                    + zone->fields.field.min;
+        }
+    }
+}
+
+static enum zone_watermark get_lowest_watermark(
+        union meminfo *mi, struct zone_watermarks *watermarks) {
+    int64_t nr_free_pages = mi->field.nr_free_pages
+                          - mi->field.cma_free;
+
+    if (nr_free_pages < watermarks->min_wmark) return WMARK_MIN;
+    if (nr_free_pages < watermarks->low_wmark) return WMARK_LOW;
+    if (nr_free_pages < watermarks->high_wmark) return WMARK_HIGH;
+    return WMARK_NONE;
+}
 ```
 
-watermark 层级如下：
+水位线层次结构可视化：
 
 ```mermaid
 graph TD
-    Full["Total Physical RAM"] --> HighW["HIGH Watermark<br/>kswapd 可能开始"]
-    HighW --> LowW["LOW Watermark<br/>kswapd 活跃"]
-    LowW --> MinW["MIN Watermark<br/>Direct reclaim<br/>OOM 风险高"]
-    MinW --> Zero["0 free pages<br/>OOM Kill"]
+    subgraph "内存水位线级别"
+        direction TB
+        Full["总物理 RAM"]
+        HighW["HIGH 水位线<br/>kswapd 可能启动"]
+        LowW["LOW 水位线<br/>kswapd 活跃"]
+        MinW["MIN 水位线<br/>直接回收开始<br/>OOM 风险高"]
+        Zero["0 空闲页<br/>OOM 杀死"]
+    end
+
+    Full -->|"空闲内存减少"| HighW
+    HighW -->|"压力增加"| LowW
+    LowW -->|"严峻压力"| MinW
+    MinW -->|"危急"| Zero
+
+    style Full fill:#44cc44,color:#000
+    style HighW fill:#88cc44,color:#000
+    style LowW fill:#cccc44,color:#000
+    style MinW fill:#cc8844,color:#000
+    style Zero fill:#cc2222,color:#fff
 ```
 
-### 8.2.9 Victim 选择：`find_and_kill_process`
+### 8.2.9 受害者选择：find_and_kill_process
 
-victim 选择算法从最高 OOM score 向下遍历：
+受害者选择算法从最高 OOM 分值向下迭代：
 
 ```c
-static int find_and_kill_process(int min_score_adj, struct kill_info *ki,
-                                 union meminfo *mi, struct wakeup_info *wi,
-                                 struct timespec *tm, struct psi_data *pd) {
+// system/memory/lmkd/lmkd.cpp (第 2555-2591 行)
+static int find_and_kill_process(int min_score_adj,
+                                 struct kill_info *ki,
+                                 union meminfo *mi,
+                                 struct wakeup_info *wi,
+                                 struct timespec *tm,
+                                 struct psi_data *pd) {
+    int killed_size = 0;
+    bool choose_heaviest_task = kill_heaviest_task;
+
     for (int i = OOM_SCORE_ADJ_MAX; i >= min_score_adj; i--) {
-        procp = choose_heaviest_task ? proc_get_heaviest(i) : proc_adj_tail(i);
-        killed_size = kill_one_process(procp, min_score_adj, ki, mi, wi, tm, pd);
+        struct proc *procp;
+
+        if (!choose_heaviest_task && i <= PERCEPTIBLE_APP_ADJ) {
+            // 对于可感知进程，始终杀死最重的
+            // 以尽量减少受害者数量
+            choose_heaviest_task = true;
+        }
+
+        while (true) {
+            procp = choose_heaviest_task ?
+                proc_get_heaviest(i) : proc_adj_tail(i);
+
+            if (!procp) break;
+
+            killed_size = kill_one_process(procp, min_score_adj,
+                                           ki, mi, wi, tm, pd);
+            if (killed_size >= 0) break;
+        }
         if (killed_size) break;
     }
     return killed_size;
 }
 ```
 
-双策略很重要：
+双重选择策略非常重要：
 
-1. **cached/background 进程**：按类似 LRU 的顺序杀掉同一 adj 级别中最近加入的进程。
-2. **用户可感知进程**：选择最重的进程，尽量减少需要杀死的可见进程数量。
+1. **对于缓存/后台进程** (`oom_adj > PERCEPTIBLE_APP_ADJ`)：杀死每个分值级别中最近添加的进程 (`proc_adj_tail`)。这遵循类似 LRU 的顺序。
+2. **对于可感知进程** (`oom_adj <= 200`)：始终杀死最重的进程 (`proc_get_heaviest`)，它会为每个候选进程读取 `/proc/[pid]/statm`。这可以最大限度地减少必须死亡的“用户可见”进程的数量。
 
-### 8.2.10 Kill 执行：`kill_one_process`
-
-选中 victim 后，lmkd 会执行多重安全检查：确认进程仍有效、检测 PID 复用、读取 RSS/swap 供日志使用、调用 vendor hook 尝试在不杀进程的情况下释放内存，然后通过 reaper 发送 kill。
+`proc_get_heaviest` 函数：
 
 ```c
-start_wait_for_proc_kill(pidfd < 0 ? pid : pidfd);
-kill_result = reaper.kill({ pidfd, pid, uid }, false);
+// system/memory/lmkd/lmkd.cpp (第 2253-2278 行)
+static struct proc *proc_get_heaviest(int oomadj) {
+    struct adjslot_list *head = &procadjslot_list[ADJTOSLOT(oomadj)];
+    struct adjslot_list *curr = head->next;
+    struct proc *maxprocp = NULL;
+    int maxsize = 0;
+
+    // 优化：如果只有一个进程，跳过大小查找
+    if ((curr != head) && (curr->next == head)) {
+        return (struct proc *)curr;
+    }
+
+    while (curr != head) {
+        int pid = ((struct proc *)curr)->pid;
+        int tasksize = proc_get_size(pid);
+        if (tasksize < 0) {
+            // 进程已死，进行清理
+            struct adjslot_list *next = curr->next;
+            pid_remove(pid);
+            curr = next;
+        } else {
+            if (tasksize > maxsize) {
+                maxsize = tasksize;
+                maxprocp = (struct proc *)curr;
+            }
+            curr = curr->next;
+        }
+    }
+    return maxprocp;
+}
 ```
 
-kill 后，lmkd 会记录日志、通知 AMS、写入 statsd，并从内部表中移除 pid。
+### 8.2.10 杀进程执行：kill_one_process
 
-### 8.2.11 Watchdog Kill 路径
+一旦选定受害者，将执行带有广泛安全检查的杀进程操作：
 
-如果 lmkd 主事件循环卡住，watchdog 线程会执行紧急 kill。该路径是同步的，因为主线程已经不可用，不能依赖异步 reaper 队列。watchdog 从高 OOM score 开始查找 victim，并使用 `pid_invalidate()` 标记 pid。
+```c
+// system/memory/lmkd/lmkd.cpp (第 2443-2549 行, 略有删减)
+static int kill_one_process(struct proc* procp, int min_oom_score,
+                            struct kill_info *ki, union meminfo *mi,
+                            struct wakeup_info *wi, struct timespec *tm,
+                            struct psi_data *pd) {
+    int pid = procp->pid;
+    int pidfd = procp->pidfd;
+    uid_t uid = procp->uid;
+    char buf[4096]; // pagesize
 
-### 8.2.12 Thrashing 检测
+    // 安全检查 1：验证进程是否仍然有效
+    if (!procp->valid || !read_proc_status(pid, buf, sizeof(buf))) {
+        goto out;
+    }
 
-lmkd 通过 `/proc/vmstat` 中的 `workingset_refault` 检测内存 thrashing。`workingset_refault` 表示最近被逐出 page cache 的页又被 fault 回来，是系统频繁丢弃仍在使用数据的强信号。
+    // 安全检查 2：检测 PID 重用
+    int64_t tgid;
+    if (!parse_status_tag(buf, "Tgid:", &tgid)) {
+        goto out;
+    }
+    if (tgid != pid) {
+        ALOGE("Possible pid reuse detected (pid %d, tgid %" PRId64 ")!",
+              pid, tgid);
+        goto out;
+    }
 
-| 属性 | 默认值 | Low RAM 默认值 |
+    // 读取 RSS 和 swap 以用于日志记录
+    int64_t rss_kb, swap_kb;
+    parse_status_tag(buf, "VmRSS:", &rss_kb);
+    parse_status_tag(buf, "VmSwap:", &swap_kb);
+
+    // 执行杀进程
+    if (pidfd >= 0) {
+        if (pidfd_send_signal(pidfd, SIGKILL, NULL, 0) < 0) {
+            PLOG(ERROR) << "pidfd_send_signal(SIGKILL) failed";
+            return -1;
+        }
+    } else {
+        if (kill(pid, SIGKILL) < 0) {
+            PLOG(ERROR) << "kill(SIGKILL) failed";
+            return -1;
+        }
+    }
+
+    // 记录杀死事件
+    ALOGI("Kill '%s' (%d), uid %d, oom_score_adj %d "
+          "to free %" PRId64 "kB rss, %" PRId64 "kB swap; "
+          "reason: %s",
+          procp->taskname, pid, uid, procp->oomadj, rss_kb, swap_kb,
+          ki->kill_desc);
+
+    return rss_kb;
+out:
+    return -1;
+}
+
+### 8.2.11 看门狗杀进程路径
+
+当 lmkd 的主事件循环挂起（由看门狗定时器检测到）时，看门狗线程会执行自己的紧急杀进程操作：
+
+```c
+// system/memory/lmkd/lmkd.cpp (第 2305-2329 行)
+static void watchdog_callback() {
+    int prev_pid = 0;
+
+    ALOGW("lmkd watchdog timed out!");
+    for (int oom_score = OOM_SCORE_ADJ_MAX; oom_score >= 0;) {
+        struct proc target;
+
+        if (!find_victim(oom_score, prev_pid, target)) {
+            oom_score--;
+            prev_pid = 0;
+            continue;
+        }
+
+        if (target.valid &&
+            reaper.kill({ target.pidfd, target.pid, target.uid },
+                        true /* 同步 */) == 0) {
+            ALOGW("lmkd watchdog killed process %d, oom_score_adj %d",
+                  target.pid, oom_score);
+            pid_invalidate(target.pid);
+            break;
+        }
+        prev_pid = target.pid;
+    }
+}
+```
+
+看门狗杀进程是**同步的**（注意 `reaper.kill()` 的 `true` 参数），这意味着它会阻塞直到 `pidfd_send_signal(SIGKILL)` 完成。这是因为看门狗线程无法使用异步收割者队列（处理队列完成的主线程已挂起）。看门狗还使用 `pid_invalidate()` 而不是 `pid_remove()`，因为后者只能从主线程 safe 调用。
+
+### 8.2.12 抖动检测 (Thrashing Detection)
+
+lmkd 通过监控 `/proc/vmstat` 中的 `workingset_refault` 计数器来检测内存抖动：
+
+```c
+// system/memory/lmkd/lmkd.cpp (第 474-497 行)
+enum vmstat_field {
+    VS_FREE_PAGES,
+    VS_INACTIVE_FILE,
+    VS_ACTIVE_FILE,
+    VS_WORKINGSET_REFAULT,
+    VS_WORKINGSET_REFAULT_FILE,
+    VS_PGSCAN_KSWAPD,
+    VS_PGSCAN_DIRECT,
+    VS_PGSCAN_DIRECT_THROTTLE,
+    VS_PGREFILL,
+    VS_FIELD_COUNT
+};
+```
+
+`workingset_refault` 指的是最近从页面缓存中驱逐、现在又被重新换入的页面——这是系统正在发生剧烈抖动的强烈信号。抖动百分比相对于页面扫描进行计算，并与可配置的阈值进行比较：
+
+| 属性 | 默认值 | 低内存设备默认值 |
 |---|---|---|
 | `ro.lmk.thrashing_limit` | 100 | 30 |
 | `ro.lmk.thrashing_limit_decay` | 10 | 50 |
-| `ro.lmk.thrashing_limit_critical` | 派生 | 派生 |
+| `ro.lmk.thrashing_limit_critical` | (衍生) | (衍生) |
 
-### 8.2.13 Reaper：异步杀进程
+### 8.2.13 收割者：异步进程杀死
 
-reaper 把 kill 操作从主事件循环中拆出来，避免 lmkd 在等待进程退出时阻塞。它优先使用 `pidfd_send_signal()`，可以避免 PID 复用竞态。异步 reaper 还可以等待进程死亡并回收状态，降低主循环延迟。
+当 lmkd 决定杀死一个进程时，实际的杀死操作由收割者 (Reaper) 线程池执行。这种设计将杀进程决策与从被杀进程中回收内存的潜在缓慢过程解耦。
 
-### 8.2.14 Watchdog
+`Reaper` 类 (`system/memory/lmkd/reaper.h` 和 `reaper.cpp`) 管理一个线程池：
 
-watchdog 监控 lmkd 主线程活性。如果主循环长时间没有响应，watchdog 会记录超时并尝试同步杀死低优先级进程，以快速释放内存并恢复系统。
+```c
+// system/memory/lmkd/reaper.h (第 23-60 行)
+class Reaper {
+public:
+    struct target_proc {
+        int pidfd;
+        int pid;
+        uid_t uid;
+    };
+private:
+    std::mutex mutex_;
+    std::condition_variable cond_;
+    std::vector<struct target_proc> queue_;
+    int active_requests_;
+    int comm_fd_;
+    int thread_cnt_;
+    pthread_t* thread_pool_;
+    bool debug_enabled_;
+    // ...
+};
+```
+
+收割者线程的主循环：
+
+1. **出队**一个杀进程请求。
+2. 通过 `pidfd_send_signal()` **发送 SIGKILL**——使用 pidfd 以避免 PID 回收竞争。
+3. **调整 cgroup 和优先级**以加速内存回收。
+4. **调用 `process_mrelease()`**——一个 Linux 系统调用（编号 448），触发从垂死进程中同步回收内存。
+
+```c
+// system/memory/lmkd/reaper.cpp (第 46-48, 91-137 行)
+static int process_mrelease(int pidfd, unsigned int flags) {
+    return syscall(__NR_process_mrelease, pidfd, flags);
+}
+
+static void* reaper_main(void* param) {
+    Reaper *reaper = static_cast<Reaper*>(param);
+    // ...
+    for (;;) {
+        target = reaper->dequeue_request();
+
+        if (pidfd_send_signal(target.pidfd, SIGKILL, NULL, 0)) {
+            reaper->notify_kill_failure(target.pid);
+            goto done;
+        }
+
+        set_process_group_and_prio(target.uid, target.pid,
+            {"CPUSET_SP_FOREGROUND", "SCHED_SP_FOREGROUND"},
+            ANDROID_PRIORITY_NORMAL);
+
+        if (process_mrelease(target.pidfd, 0)) {
+            ALOGE("process_mrelease %d failed: %s",
+                  target.pid, strerror(errno));
+        }
+done:
+        close(target.pidfd);
+        reaper->request_complete();
+    }
+}
+```
+
+`process_mrelease()` 系统调用非常重要，因为如果没有它，被杀进程的内存将由内核作为 `exit_mmap()` 的一部分延迟释放。通过 `process_mrelease()`，调用线程会主动回收垂死进程的内存，从而缩短杀进程决策与实际内存可用之间的时间。
+
+### 8.2.14 看门狗 (The Watchdog)
+
+lmkd 包含一个看门狗定时器 (`system/memory/lmkd/watchdog.cpp`)，用于检测守护进程是否挂起——这可能是灾难性的，因为在内存压力期间将没有进程被杀死：
+
+```c
+// system/memory/lmkd/watchdog.h (第 23-39 行)
+class Watchdog {
+private:
+    int timeout_;                  // 2 秒 (WATCHDOG_TIMEOUT_SEC)
+    timer_t timer_;
+    std::atomic<bool> timer_created_;
+    void (*callback_)();
+public:
+    Watchdog(int timeout, void (*callback)())
+        : timeout_(timeout), timer_created_(false), callback_(callback) {}
+    bool init();
+    bool start();
+    bool stop();
+    bool create_timer(sigset_t &sigset);
+    void bite() const { if (callback_) callback_(); }
+};
+```
+
+看门狗使用 `CLOCK_MONOTONIC` 定时器并通过 `SIGALRM` 传递。如果 lmkd 的主事件循环没有在 2 秒超时内解除看门狗，看门狗就会“咬人”——通常触发中止或记录诊断信息。
 
 ### 8.2.15 可配置属性
 
-lmkd 行为由多组 `ro.lmk.*` 属性控制，例如 PSI 阈值、thrashing limit、swap utilization limit、kill timeout、kill_heaviest_task 等。OEM 会根据设备 RAM、zRAM 大小、存储性能和产品策略调优这些值。
+lmkd 从系统属性中读取配置，并支持实验性覆盖：
+
+```c
+// system/memory/lmkd/lmkd.cpp (第 108-110 行)
+#define GET_LMK_PROPERTY(type, name, def) \
+    property_get_##type("persist.device_config.lmkd_native." name, \
+        property_get_##type("ro.lmk." name, def))
+```
+
+关键属性：
+
+| 属性 | 默认值 | 描述 |
+|---|---|---|
+| `ro.lmk.debug` | false | 启用详细的杀进程日志 |
+| `ro.lmk.kill_heaviest_task` | false | 按 RSS 而非 oom_adj 杀进程 |
+| `ro.lmk.kill_timeout_ms` | 0 | 两次杀进程之间的最小时间 |
+| `ro.lmk.use_minfree_levels` | false | 使用传统的 minfree 阈值 |
+| `ro.lmk.psi_partial_stall_ms` | 70 (低内存 200) | PSI some-stall 阈值 |
+| `ro.lmk.psi_complete_stall_ms` | 700 | PSI full-stall 阈值 |
+| `ro.lmk.psi_window_size_ms` | 1000 | PSI 监控窗口 |
+| `ro.lmk.swap_free_low_percentage` | 10 | 低 Swap 阈值 |
+| `ro.lmk.thrashing_limit` | 100 (低内存 30) | 抖动百分比阈值 |
+| `ro.lmk.swap_compression_ratio` | 1 | 预期的 zRAM 压缩率 |
+| `ro.lmk.filecache_min_kb` | 0 | 要维持的最小文件缓存量 |
+| `ro.lmk.direct_reclaim_threshold_ms` | 0 | 直接回收停顿阈值 |
 
 ### 8.2.16 事件循环架构
 
-lmkd 主循环基于 epoll，监听来自 AMS 的控制 socket、PSI fd、memory pressure fd、BPF memory event 和 watchdog 通知。所有输入最终都会进入统一状态机，更新进程表或触发 kill 检查。
+lmkd 主事件循环使用 `epoll` 在多个事件源之间进行多路复用：
 
-### 8.2.17 BPF Memory Event 集成
+```c
+// system/memory/lmkd/lmkd.cpp (第 284-290 行)
+/*
+ * 1 个 ctrl 监听 socket, 3 个 ctrl 数据 socket, 3 个内存压力级别,
+ * 1 个 lmk 事件 + 1 个用于等待进程死亡的 fd
+ * + 1 个用于接收杀进程失败通知的 fd
+ * + 1 个用于接收 memevent_listener 通知系统的 fd
+ */
+#define MAX_EPOLL_EVENTS (1 + MAX_DATA_CONN + VMPRESS_LEVEL_COUNT \
+                          + 1 + 1 + 1 + 1)
+```
 
-现代 Android 可通过 BPF map / event 读取额外内存信息，例如 GPU memory 总量。lmkd 中的 `read_gpu_total_kb()` 从 `/sys/fs/bpf/map_gpuMem_gpu_mem_total_map` 读取 GPU 使用量，用于更准确判断系统总内存压力。
+```mermaid
+graph TD
+    subgraph "lmkd 事件循环 (epoll)"
+        EPoll["epoll_wait()"]
 
-### 8.2.18 Swap Utilization 计算
+        subgraph "事件源"
+            CtrlSock["控制套接字<br/>(AMS 连接)"]
+            DataSock1["数据套接字 1<br/>(AMS 命令)"]
+            DataSock2["数据套接字 2<br/>(init)"]
+            DataSock3["数据套接字 3<br/>(测试)"]
+            PSI_Low["PSI 低级别<br/>(some 70ms/1s)"]
+            PSI_Med["PSI 中级别<br/>(some 100ms/1s)"]
+            PSI_Crit["PSI 危急级别<br/>(full 70ms/1s)"]
+            KillDone["pidfd<br/>(杀死完成)"]
+            KillFail["收割者管道<br/>(杀死失败)"]
+            MemEvent["memevent_listener<br/>(BPF 事件)"]
+        end
+    end
 
-swap utilization 用于衡量 zRAM 是否接近饱和。低 swap 剩余空间加高 thrashing 通常意味着系统继续回收收益很低，此时杀进程比继续换页更有效。
+    CtrlSock -->|EPOLLIN| EPoll
+    DataSock1 -->|EPOLLIN| EPoll
+    DataSock2 -->|EPOLLIN| EPoll
+    DataSock3 -->|EPOLLIN| EPoll
+    PSI_Low -->|EPOLLPRI| EPoll
+    PSI_Med -->|EPOLLPRI| EPoll
+    PSI_Crit -->|EPOLLPRI| EPoll
+    KillDone -->|EPOLLIN| EPoll
+    KillFail -->|EPOLLIN| EPoll
+    MemEvent -->|EPOLLIN| EPoll
+
+    EPoll --> Handler["事件处理器分发"]
+    Handler --> CmdH["ctrl_command_handler()"]
+    Handler --> PsiH["__mp_event_psi()"]
+    Handler --> KillH["kill_done_handler()"]
+    Handler --> FailH["kill_fail_handler()"]
+```
+
+在收到 PSI 事件后，lmkd 进入轮询模式，定期短间隔重新检查内存状况：
+
+| 常量 | 值 | 用途 |
+|---|---|---|
+| `PSI_POLL_PERIOD_SHORT_MS` | 10 ms | 高压期间的轮询间隔 |
+| `PSI_POLL_PERIOD_LONG_MS` | 100 ms | 中压期间的轮询间隔 |
+| `DEFAULT_PSI_WINDOW_SIZE_MS` | 1000 ms | PSI 监控窗口大小 |
+
+这种轮询是必要的，因为 PSI 事件受速率限制（每个窗口最多一个），但内存状况在窗口内可能迅速变化。
+
+### 8.2.17 BPF 内存事件集成
+
+现代 lmkd 集成了内核的 BPF (Berkeley Packet Filter) 子系统，以接收更精细的内存事件。`memevent_listener` 跟踪直接回收和 kswapd 活动：
+
+```c
+// system/memory/lmkd/lmkd.cpp (第 183 行)
+static std::unique_ptr<android::bpf::memevents::MemEventListener>
+    memevent_listener(nullptr);
+static struct timespec direct_reclaim_start_tm;
+static struct timespec kswapd_start_tm;
+```
+
+BPF 程序在启动完成后加载：
+
+```c
+// system/memory/lmkd/lmkd.cpp (LMK_BOOT_COMPLETED 处理器)
+case LMK_BOOT_COMPLETED:
+    // 启动完成后初始化内存事件监听器
+    // 以防止等待 BPF 程序加载
+    init_memevent();
+    boot_completed_handled = true;
+    break;
+```
+
+这种 BPF 集成提供了比解析 `/proc/vmstat` 计数器更准确的回收检测，后者可能会错过轮询间隔之间短暂的回收脉冲。
+
+### 8.2.18 交换利用率计算
+
+lmkd 计算交换利用率以检测交换子系统何时趋于饱和：
+
+```c
+// system/memory/lmkd/lmkd.cpp (第 2712-2717 行)
+static int calc_swap_utilization(union meminfo *mi) {
+    int64_t swap_used = mi->field.total_swap - get_free_swap(mi);
+    int64_t total_swappable = mi->field.active_anon
+                            + mi->field.inactive_anon
+                            + mi->field.shmem + swap_used;
+    return total_swappable > 0 ? (swap_used * 100) / total_swappable : 0;
+}
+```
+
+该计算代表已交换的可交换内存百分比。高利用率（可通过 `ro.lmk.swap_util_max` 配置）表明系统换出页面的剩余能力有限，使得杀进程变得更加紧迫。
 
 ---
 
-## 8.3 Cgroups 与内存统计
+## 8.3 Cgroup 与内存统计 (Memory Accounting)
+
+Android 使用 Linux cgroups (控制组) 将进程组织成层次结构，以便进行资源管理和统计。内存 cgroup (`memcg`) 对于跟踪每个应用的内存使用情况和强制执行软限制尤为重要。
 
 ### 8.3.1 Cgroup 版本
 
-Android 使用 cgroup 对进程分组并统计资源。不同 Android 版本和设备可能同时使用 cgroup v1 与 v2 控制器。memory cgroup 用于按进程组统计内存使用、限制和 pressure。
+Android 同时支持 cgroup v1 和 cgroup v2. lmkd 代码会检测正在使用的版本：
+
+```c
+// system/memory/lmkd/statslog.h (第 33-37 行)
+enum class MemcgVersion {
+    kNotFound,
+    kV1,
+    kV2,
+};
+
+MemcgVersion memcg_version();
+```
+
+在现代 Android (Android 12+) 上，首选 cgroup v2. cgroup 层次结构在启动期间由 init 配置：
+
+```
+/dev/memcg/                          # cgroup v1 内存控制器挂载点
+/dev/memcg/apps/                     # 所有应用进程
+/dev/memcg/apps/uid_<uid>/           # 按 UID 分组
+/dev/memcg/apps/uid_<uid>/pid_<pid>/ # 按进程分组
+/dev/memcg/system/                   # 系统进程
+
+# cgroup v2 (统一层次结构)
+/sys/fs/cgroup/                      # 统一的 cgroup v2 挂载点
+```
 
 ### 8.3.2 进程组分配
 
-ActivityManagerService 根据进程状态把进程放入不同 cgroup，例如 top-app、foreground、background、cached、restricted。调度、内存、IO 和 freezer 策略都可基于这些分组施加。
+当 ActivityManagerService 通过 `LMK_PROCPRIO` 向 lmkd 注册进程时，lmkd 会将进程分配给适当的 cgroup 并设置其内存软限制：
 
-### 8.3.3 Task Profiles
+```c
+// system/memory/lmkd/lmkd.cpp (第 1119-1172 行)
+static void register_oom_adj_proc(const struct lmk_procprio& proc,
+                                   struct ucred* cred) {
+    char val[20];
+    int soft_limit_mult;
 
-Task profiles 是 Android 对 cgroup 操作的抽象。配置文件描述某类任务应加入哪些 cgroup、设置哪些参数。framework 和 native daemon 通过 task profile API 应用这些策略，而不是直接操作 cgroupfs。
+    if (proc.ptype == PROC_TYPE_APP && per_app_memcg) {
+        if (proc.oomadj >= 900) {
+            soft_limit_mult = 0;
+        } else if (proc.oomadj >= 800) {
+            soft_limit_mult = 0;
+        } else if (proc.oomadj >= 700) {
+            soft_limit_mult = 0;
+        } else if (proc.oomadj >= 600) {
+            // Launcher 应该是可感知的
+            soft_limit_mult = 1;
+        } else if (proc.oomadj >= 300) {
+            soft_limit_mult = 1;
+        } else if (proc.oomadj >= 200) {
+            soft_limit_mult = 8;      // 64 MB
+        } else if (proc.oomadj >= 100) {
+            soft_limit_mult = 10;     // 80 MB
+        } else if (proc.oomadj >= 0) {
+            soft_limit_mult = 20;     // 160 MB
+        } else {
+            // 持久化进程：512 MB
+            soft_limit_mult = 64;
+        }
 
-### 8.3.4 Memory Cgroup Accounting
+        snprintf(val, sizeof(val), "%d",
+                 soft_limit_mult * EIGHT_MEGA);  // EIGHT_MEGA = 1 << 23
+        // 写入 cgroup memory.soft_limit_in_bytes
+        std::string soft_limit_path;
+        CgroupGetAttributePathForTask("MemSoftLimit",
+                                       proc.pid, &soft_limit_path);
+        writefilestring(soft_limit_path.c_str(), val, !is_system_server);
+    }
+}
+```
 
-memory cgroup 能统计匿名页、file cache、swap、RSS、page fault、pressure 等指标。系统服务可以用这些数据做 per-app 或 per-UID 内存归因。
+软限制倍数转化为实际内存限制：
 
-### 8.3.5 App Categories 与 Freezer Cgroup
+| OOM 分值范围 | 软限制倍数 | 有效限制 |
+|---|---|---|
+| >= 900 (cached) | 0 | 无限制 |
+| >= 700 (previous) | 0 | 无限制 |
+| >= 600 (home) | 1 | 8 MB |
+| >= 300 (backup) | 1 | 8 MB |
+| >= 200 (perceptible) | 8 | 64 MB |
+| >= 100 (visible) | 10 | 80 MB |
+| >= 0 (foreground) | 20 | 160 MB |
+| < 0 (persistent) | 64 | 512 MB |
 
-Android 使用 freezer cgroup 冻结 cached/background app，降低 CPU 唤醒和内存抖动。冻结进程仍保留内存，但不会运行用户态代码。与 lmkd 配合时，冻结 app 通常也是低优先级 kill 候选。
+这些是**软限制**——内核会尝试先从超过软限制的进程中回收内存，然后再从限制范围内的进程中回收，但如果内存充足，进程可以使用更多内存。
+
+### 8.3.3 任务规范 (Task Profiles)
+
+Android 使用任务规范框架扩展了 cgroup 管理，该框架提供了将进程分配给 cgroup 的更高级别 API：
+
+```c
+// 在 reaper.cpp 中使用 (第 56-65, 98-99 行)
+set_process_group_and_prio(target.uid, target.pid,
+    {"CPUSET_SP_FOREGROUND", "SCHED_SP_FOREGROUND"},
+    ANDROID_PRIORITY_NORMAL);
+
+// 在收割者线程初始化中
+SetTaskProfiles(tid, {"CPUSET_SP_FOREGROUND"}, true);
+```
+
+任务规范在 JSON 配置文件中定义：
+
+```
+/etc/task_profiles.json          # 规范定义
+/etc/cgroups.json                # cgroup 控制器配置
+```
+
+内存子系统常用的任务规范：
+
+| 规范 | 用途 |
+|---|---|
+| `ServiceCapacityLow` | 后台服务的低 CPU 容量 |
+| `CPUSET_SP_FOREGROUND` | 前台 CPU 集（所有核心） |
+| `SCHED_SP_FOREGROUND` | 前台调度组 |
+| `HighEnergySaving` | 后台任务的高能效执行 |
+| `MaxPerformance` | 前台应用的满性能 |
+
+### 8.3.4 内存 Cgroup 统计
+
+内存 cgroup 为每个组跟踪多个计数器：
+
+```
+# 每个 cgroup 的内存统计文件 (cgroup v1)
+memory.usage_in_bytes         # 当前内存使用量
+memory.max_usage_in_bytes     # 峰值内存使用量
+memory.limit_in_bytes         # 硬限制 (OOM 杀死触发器)
+memory.soft_limit_in_bytes    # 软限制 (回收优先级)
+memory.stat                   # 详细统计
+memory.oom_control            # OOM killer 设置
+
+# 每个 cgroup 的内存统计文件 (cgroup v2)
+memory.current                # 当前内存使用量
+memory.high                   # 高压阈值
+memory.max                    # 硬限制
+memory.stat                   # 详细统计
+memory.events                 # OOM 和其他事件
+```
+
+`memory.stat` 文件提供了细粒度的细分：
+
+```mermaid
+graph TD
+    subgraph "memory.stat 细分"
+        Total["memory.current<br/>(总使用量)"]
+        Anon["anon<br/>匿名页<br/>(堆, 栈)"]
+        File["file<br/>文件备份页<br/>(页面缓存)"]
+        Kernel["kernel<br/>内核内存<br/>(slabs, 页表)"]
+        Shmem["shmem<br/>共享内存<br/>(tmpfs, ashmem)"]
+        Swap["swap<br/>已换出页面"]
+    end
+
+    Total --> Anon
+    Total --> File
+    Total --> Kernel
+    Total --> Shmem
+    Total --> Swap
+```
+
+### 8.3.5 应用类别与 Freezer Cgroup
+
+Android 11 引入了应用冻结器 (App Freezer)，它使用 cgroup freezer 控制器来挂起后台应用，而不是直接杀死它们。冻结的应用消耗零 CPU 但保留其内存：
+
+```
+/sys/fs/cgroup/freezer/apps/uid_<uid>/pid_<pid>/freezer.state
+# "FROZEN" 或 "THAWED"
+```
+
+当应用被冻结时，lmkd 会调低其回收优先级，因为冻结的应用不太可能很快重新激活页面，这使得它们的页面成为页面回收的理想候选者。
+
+Freezer 与 lmkd 的交互非常重要：
+1. 当应用进入后台时，ActivityManagerService 可能会将其冻结。
+2. 冻结的应用依然消耗内存——它们的 oom_adj 很高，是 lmkd 杀进程的候选者。
+3. 在杀死冻结应用之前，lmkd 必须先将其解冻（解冻状态下进程才能处理信号）。
+4. 如果内存压力严峻，lmkd 可能会优先杀死冻结应用，因为定义上它们并没有在执行对用户有用的工作。
 
 ---
 
-## 8.4 zRAM（压缩 Swap）
+## 8.4 zRAM (压缩交换区)
+
+Android 使用 zRAM（压缩的 RAM 磁盘）作为交换设备，而不是传统的基于磁盘的交换。zRAM 在存储页面之前会在内存中进行压缩，允许系统在付出压缩和解压缩 CPU 周期的代价下，有效地增加可用内存容量。
 
 ### 8.4.1 zRAM 架构
 
-zRAM 是位于 RAM 中的压缩块设备，用作 swap。匿名页被换出时不会写到慢速闪存，而是压缩后存入内存中的 zRAM 设备。这样牺牲 CPU 换取更高有效内存容量。
-
 ```mermaid
 graph TD
-    A["Anonymous page"] --> B["Swap out"]
-    B --> C["Compress (lz4/zstd)"]
-    C --> D["zRAM block device"]
-    D --> E["RAM 中的压缩页"]
-    E --> F["Swap in"]
-    F --> G["Decompress"]
-    G --> H["恢复匿名页"]
+    subgraph "物理 RAM"
+        subgraph "普通内存"
+            Active["活跃页<br/>(正在使用)"]
+            Inactive["不活跃页<br/>(交换候选者)"]
+            Free["空闲页"]
+        end
+
+        subgraph "zRAM 设备"
+            Compressed["压缩后的页面<br/>(平均约 2:1)"]
+            Metadata["zRAM 元数据<br/>(页表等)"]
+        end
+    end
+
+    Inactive -->|"kswapd<br/>执行压缩"| Compressed
+    Compressed -->|"缺页中断<br/>执行解压"| Active
+
+    subgraph "内核交换子系统"
+        kswapd["kswapd<br/>(后台回收)"]
+        DirectReclaim["直接回收<br/>(同步)"]
+    end
+
+    kswapd --> Inactive
+    DirectReclaim --> Inactive
 ```
+
+Android 上 zRAM 的关键特性：
+- **压缩算法**：LZ4（速度默认）或 ZSTD（更高的压缩率，更多的 CPU 消耗）。
+- **典型压缩率**：应用数据通常为 2:1 到 3:1。
+- **zRAM 大小**：通常配置为物理 RAM 的 50-75%。
+- **无磁盘交换**：Android 刻意避免使用闪存进行交换，以保护闪存寿命并避免缓慢的 I/O 停顿。
 
 ### 8.4.2 zRAM 配置
 
-Android init 脚本通常配置 zRAM 大小、压缩算法和 swappiness。常见参数包括：
+zRAM 在启动期间通过 init 脚本进行配置：
 
-```text
-/sys/block/zram0/disksize
-/sys/block/zram0/comp_algorithm
-/proc/sys/vm/swappiness
-/proc/sys/vm/page-cluster
+```shell
+# 典型的 init.rc zram 配置
+write /sys/block/zram0/comp_algorithm lz4
+write /sys/block/zram0/disksize 2147483648   # 2 GB
+exec_start swapon_all
+
+# fstab 条目
+/dev/block/zram0  none  swap  defaults  zramsize=2147483648,zram_backingdev_size=512M
 ```
 
-模拟器和设备配置常使用 lz4，因为它速度快、延迟低。
+内核通过 `/sys/block/zram0/` 暴露 zRAM 统计信息：
+- `disksize`：最大未压缩数据大小。
+- `mem_used_total`：压缩数据实际消耗的内存。
+- `orig_data_size`：原始（未压缩）数据大小。
+- `compr_data_size`：压缩后的数据大小。
+- `comp_algorithm`：正在使用的压缩算法。
 
-### 8.4.3 `zsmalloc`：zRAM 内存分配器
+### 8.4.3 zsmalloc：zRAM 内存分配器
 
-zRAM 使用 `zsmalloc` 管理压缩对象。压缩页大小可变，`zsmalloc` 会把它们打包到内存 page 中，以减少内部碎片。它适合大量小型、大小不一的压缩对象。
+zRAM 使用一种名为 zsmalloc 的专用内存分配器（来自内核中的 `mm/zsmalloc.c`）。传统的分配器如 slab 按页大小或更大的块进行分配，这对于 zRAM 处理的许多小型压缩对象来说会浪费内存。
 
-### 8.4.4 Android 的 zRAM 调优
+zsmalloc 特性：
+- **大小类 (Size classes)**：对象按大小类分组（32 字节到 4 KB）。
+- **紧凑化 (Compaction)**：可以紧凑化部分填充的页面以减少碎片。
+- **跨页分配 (Page spanning)**：单个 zsmalloc 对象可以跨越多个物理页。
 
-调优 zRAM 需要平衡：
+### 8.4.4 zRAM 对 lmkd 的影响
 
-- RAM 容量与 zRAM 大小。
-- CPU 压缩/解压开销。
-- 存储速度与是否启用 writeback。
-- lmkd kill aggressiveness。
-- 目标设备类别，如 low-RAM、mid-range、flagship。
+lmkd 非常敏锐地意识到 zRAM 的行为。`ro.lmk.swap_compression_ratio` 属性（默认 1:1）用于调整可用内存的计算。在 zRAM 开启的情况下，内核报告的 `SwapFree` 可能是误导性的，因为交换空间本身就消耗物理 RAM。
 
-### 8.4.5 zRAM Writeback
+### 8.4.5 zRAM 写回 (Writeback)
 
-部分设备支持把 zRAM 中冷页写回磁盘或 backing device，以进一步释放 RAM。这需要考虑闪存寿命、I/O 延迟和功耗，因此必须谨慎启用。
+Android 10+ 支持 zRAM 写回，冷压缩页面会被写入备份设备（通常是闪存上的专用分区）：
+- `write /sys/block/zram0/idle all`：标记所有页面为闲置。
+- `write /sys/block/zram0/writeback idle`：将闲置页面写回闪存。
 
-### 8.4.6 监控 zRAM 性能
-
-可通过以下接口观察 zRAM：
-
-```bash
-adb shell cat /proc/swaps
-adb shell cat /sys/block/zram0/mm_stat
-adb shell cat /sys/block/zram0/stat
-adb shell cat /proc/meminfo | grep -i swap
-```
-
-### 8.4.7 zRAM 与 lmkd 交互总结
-
-zRAM 给系统更多时间在不杀进程的情况下缓解内存压力，但当 swap 接近饱和、thrashing 增加、PSI 变差时，继续换页会导致卡顿。lmkd 会利用 swap utilization 和 thrashing 指标判断何时从“回收/换页”切换到“杀进程”。
-
-### 8.4.8 针对不同设备等级调优 zRAM
-
-| 设备类别 | zRAM 策略 |
-|----------|-----------|
-| Low-RAM | 较大 zRAM、更积极后台 kill、更低 thrashing 阈值 |
-| Mid-range | 平衡 zRAM 大小和 kill 策略 |
-| Flagship | 较宽松缓存保留，优先体验和快速切换 |
-| Wear/TV | 根据固定工作负载和交互模式调优 |
+这进一步减小了 zRAM 的内存占用，但为了减少闪存磨损，通常会谨慎使用。
 
 ---
 
-## 8.5 ION / DMA-BUF（图形缓冲区分配）
+## 8.5 ION / DMA-BUF (图形缓冲区分配)
 
-### 8.5.1 演进：ION 到 DMA-BUF Heaps
+图形缓冲区是 Android 设备上最大的内存消耗者之一。1080p RGBA 缓冲区约占 8 MB。图形流水线需要专门的分配机制，使 CPU 和各种硬件加速器（GPU、显示控制器、摄像头 ISP）都能访问这些内存。
 
-Android 最初使用 ION 分配图形、相机、视频和显示硬件共享的缓冲区。ION 是 Android 专用内核驱动。现代 Android 已迁移到上游 DMA-BUF heaps 框架，减少树外补丁并统一缓冲区共享接口。
+### 8.5.1 演进：从 ION 到 DMA-BUF 堆
 
-### 8.5.2 ION 分配器（遗留）
+Android 的图形缓冲区分配经历了几个阶段：
+- **ION 分配器** (`/dev/ion`)：早期 Android 的标准，支持 System、CMA、Carveout 等多种堆类型。
+- **DMA-BUF 堆** (`/dev/dma_heap/`)：现代 Android (12+) 的标准，是 Linux 上游的替代方案。
 
-ION 提供多个 heap，如 system、CMA、carveout。用户态通过 `/dev/ion` 和 ioctl 分配 buffer，并得到可传递的 DMA-BUF fd。由于 ION 长期不在上游主线，维护成本高，最终被 DMA-BUF heaps 替代。
+### 8.5.2 ION 堆类型
 
-### 8.5.3 DMA-BUF Heaps（现代）
+| 堆类型 | 描述 | 用途 |
+|---|---|---|
+| `ION_HEAP_SYSTEM` | 来自伙伴分配器的页面 | 通用缓冲区 |
+| `ION_HEAP_DMA` (CMA) | 连续内存分配器 | 摄像头、显示 |
+| `ION_HEAP_CARVEOUT` | 预留的物理内存区域 | 安全视频、受信任执行环境 |
 
-DMA-BUF heaps 通过 `/dev/dma_heap/<name>` 暴露 heap。用户态打开 heap 设备并调用 `DMA_HEAP_IOCTL_ALLOC` 分配 buffer，返回 fd 可在进程和硬件设备之间共享。
+### 8.5.3 DMA-BUF 堆 (现代)
 
-```mermaid
-graph TD
-    A["/dev/dma_heap/system"] --> B["DMA_HEAP_IOCTL_ALLOC"]
-    B --> C["DMA-BUF fd"]
-    C --> D["GPU"]
-    C --> E["Camera"]
-    C --> F["Display / HWC"]
-    C --> G["Userspace mmap"]
-```
+DMA-BUF 堆是 ION 的上游 Linux 替代方案。每个堆在 `/dev/dma_heap/` 下暴露自己的设备节点。`BufferAllocator` 类透明地处理了 ION 到 DMA-BUF 的转换。
 
 ### 8.5.4 Gralloc：图形内存分配 HAL
 
-Gralloc HAL 把 framework 层的 buffer 需求转换成具体 DMA-BUF heap 分配。`GraphicBufferAllocator` 会根据 mapper 版本选择 Gralloc5、Gralloc4、Gralloc3 或 Gralloc2 实现。
+Gralloc HAL 位于 ION/DMA-BUF 之上，为分配图形缓冲区提供标准化接口。它包含 `GraphicBufferAllocator` 和 `GraphicBufferMapper`。
 
-相关源码包括：
-
-```text
-frameworks/native/libs/ui/GraphicBufferAllocator.cpp
-frameworks/native/libs/ui/GraphicBufferMapper.cpp
-system/memory/libdmabufheap/BufferAllocator.cpp
-```
-
-### 8.5.5 `GraphicBuffer` 生命周期
+### 8.5.5 GraphicBuffer 生命周期
 
 ```mermaid
 sequenceDiagram
-    participant App as Application
+    participant App as 应用程序
     participant SF as SurfaceFlinger
-    participant GBA as GraphicBuffer Allocator
+    participant GBA as GraphicBuffer 分配器
     participant Gralloc as Gralloc HAL
-    participant DMA as DMA-BUF Heap / ION
+    participant DMA as DMA-BUF 堆 / ION
 
     App->>SF: dequeueBuffer()
     SF->>GBA: allocate(w, h, format, usage)
     GBA->>Gralloc: allocate()
     Gralloc->>DMA: ioctl(DMA_HEAP_IOCTL_ALLOC)
     DMA-->>Gralloc: DMA-BUF fd
-    Gralloc-->>GBA: buffer_handle_t + stride
+    Gralloc-->>GBA: buffer_handle_t
     GBA-->>SF: GraphicBuffer
-    SF-->>App: buffer slot
-    App->>App: lock() + render + unlock()
-    App->>SF: queueBuffer()
-    SF->>SF: Compose with GPU/HWC
-    SF->>App: releaseBuffer()
+    SF-->>App: 缓冲区槽位
 ```
 
-`GraphicBufferAllocator` 维护全局 allocation list 供调试使用，`adb shell dumpsys SurfaceFlinger` 可查看当前图形缓冲区分配情况。
+### 8.5.6 GPU 内存追踪
 
-### 8.5.6 `HardwareBuffer`：NDK 接口
+lmkd 通过 BPF map (`/sys/fs/bpf/map_gpuMem_gpu_mem_total_map`) 跟踪全局 GPU 内存使用情况。这使得系统在内存压力决策时能够考虑到不可见但巨大的 GPU 资源占用。
 
-NDK 开发者通过 `AHardwareBuffer` 分配图形缓冲区。关键 usage flag 包括 CPU read/write、GPU sampled image、GPU color output、composer overlay、video encode、camera write 和 protected content。DMA-BUF allocator 可根据这些 flag 选择 cached 或 uncached heap。
+---
 
-### 8.5.7 DMA-BUF Sync 与 Cache Coherency
+## 8.6 匿名共享内存 (Ashmem) 与 memfd
 
-CPU 与硬件加速器共享内存时，需要显式管理 cache coherency。DMA-BUF 使用 `DMA_BUF_IOCTL_SYNC`：
+共享内存是 Android 进程间通信的核心，广泛用于 Binder 大数据传输、Gralloc 缓冲区以及跨进程资源共享。
 
-1. **CPU 访问前**：`CpuSyncStart()` 使 CPU 看到硬件写入。
-2. **CPU 访问后**：`CpuSyncEnd()` 刷新 CPU 写入，使硬件可见。
+### 8.6.1 Ashmem (Android Shared Memory)
+
+Ashmem 是 Android 独有的内核驱动 (`drivers/staging/android/ashmem.c`)，提供：
+- **命名区域**：在 `/proc/[pid]/maps` 中可见。
+- **Pinning/Unpinning**：允许内核在压力下回收“解锁”的内存块。
+
+### 8.6.2 memfd：现代替代方案
+
+Android 10 开始转向 Linux 标准的 `memfd_create()`。
+- **密封 (Sealing)**：通过 `F_ADD_SEALS` 保证 fd 发送后内容不可被修改。
+- **安全性**：与 SELinux 和 seccomp 配合更自然。
+
+---
+
+## 8.7 内存分析与工具
+
+Android 提供了一系列工具，从宏观概览到微观分配回溯：
+
+### 8.7.1 dumpsys meminfo
+
+最常用的快速分析工具：
+- **Pss Total**：成比例集大小，衡量进程内存影响最准确的指标。
+- **Private Dirty**：进程修改过的、无法共享的页面。
+- **Private Clean**：未修改的私有页面（如从 APK 加载的代码）。
+- **Rss Total**：实际映射的总页数（包含共享页的完整大小）。
+
+### 8.7.2 heapprofd (Perfetto 原生堆分析)
+
+`heapprofd` 是一个无守护进程的堆分析器，通过采样拦截 `malloc/free`，捕获分配热点的火焰图 (Flamegraph)。它对性能影响极小，非常适合在量产版本上进行分析。
+
+### 8.7.3 showmap 与 libmeminfo
+
+`showmap` 提供了进程内存映射的详细视图，构建在 `/proc/[pid]/smaps` 之上。相关的工具还包括：
+- `procrank`：按内存使用量对进程进行排名。
+- `procmem`：进程内存摘要。
+
+### 8.7.4 libmemunreachable：原生泄露检测
+
+`libmemunreachable` 是一个运行时的原生代码泄露检测器。它通过执行一次“保守的垃圾回收”扫描进程堆，找出没有根引用的孤立内存块。
 
 ```mermaid
-sequenceDiagram
-    participant CPU
-    participant Cache as CPU Cache
-    participant RAM as Physical Memory
-    participant GPU
-
-    GPU->>RAM: 写入 buffer
-    CPU->>Cache: CpuSyncStart(READ)
-    Cache->>Cache: invalidate cache lines
-    CPU->>RAM: 读取最新数据
-    CPU->>Cache: 写入修改
-    CPU->>Cache: CpuSyncEnd(WRITE)
-    Cache->>RAM: flush dirty lines
-    GPU->>RAM: 读取 CPU 修改
+flowchart TD
+    A[调用 GetUnreachableMemory] --> B[创建 PtracerThread]
+    B --> C["Ptrace 目标进程<br/>中的所有线程"]
+    C --> D["捕获寄存器和栈内容"]
+    D --> E[快照 /proc/pid/maps]
+    E --> F[获取 Binder 引用]
+    F --> G[Fork 堆行走进程]
 ```
 
-### 8.5.8 GPU 内存跟踪
+代码能够识别不同的映射类型，以实现准确的根（root）识别：
 
-lmkd 通过 BPF map 跟踪 GPU 内存总量：
-
-```c
-static int64_t read_gpu_total_kb() {
-    static android::base::unique_fd fd(
-        android::bpf::mapRetrieveRO("/sys/fs/bpf/map_gpuMem_gpu_mem_total_map"));
-    ...
+```cpp
+// system/memory/libmemunreachable/MemUnreachable.cpp (第 256-277 行)
+// 堆映射 (潜在的泄露)
+if (mapping_name == "[anon:libc_malloc]" ||
+    StartsWith(mapping_name, "[anon:scudo:") ||
+    StartsWith(mapping_name, "[anon:GWP-ASan")) {
+    heap_mappings.emplace_back(*it);
+}
+// Dalvik 堆 (全局根)
+else if (has_prefix(mapping_name, "[anon:dalvik-")) {
+    globals_mappings.emplace_back(*it);
+}
+// 线程栈
+else if (has_prefix(mapping_name, "[stack")) {
+    stack_mappings.emplace_back(*it);
 }
 ```
 
-该 BPF map 由 GPU memory tracking 程序维护，使 lmkd 无需 vendor 专用代码也能获得 GPU 内存使用量。
+命令行用法：
 
----
+```shell
+# 转储进程的无法到达内存
+adb shell dumpsys -t 600 meminfo --unreachable <pid>
 
-## 8.6 Ashmem 与 Memfd
-
-### 8.6.1 Ashmem（Android Shared Memory）
-
-Ashmem 是 Android 最早的共享内存机制，最初由内核驱动 `drivers/staging/android/ashmem.c` 实现。它提供：
-
-- **命名区域**：region 名称可在 `/proc/[pid]/maps` 中看到，便于调试。
-- **pin/unpin**：可 unpin 让内核在内存压力下回收，再访问前重新 pin。
-- **按大小分配**：相比 POSIX shared memory，更符合 Android 早期需求。
-
-典型使用模式：
-
-```c
-int fd = open("/dev/ashmem", O_RDWR);
-ioctl(fd, ASHMEM_SET_NAME, "my-shared-region");
-ioctl(fd, ASHMEM_SET_SIZE, 4096);
-void* ptr = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+# 原生代码中的编程用法
+#include <memunreachable/memunreachable.h>
+android::UnreachableMemoryInfo info;
+android::GetUnreachableMemory(info, 100);
+ALOGE("%s", info.ToString(true).c_str());
 ```
 
-### 8.6.2 Memfd：现代替代方案
+### 8.7.6 内存分析决策树
 
-Android 正从 ashmem 迁移到 `memfd_create()`。memfd 是上游 Linux syscall，会创建由 tmpfs 支撑的匿名 fd。
-
-优势包括：
-
-- 上游内核支持，无需 Android 专用驱动。
-- 支持 sealing，可防止写入或 resize。
-- fd-based sharing 与 seccomp/SELinux 自然兼容。
-
-```c
-int fd = memfd_create("my-shared-region", MFD_CLOEXEC | MFD_ALLOW_SEALING);
-ftruncate(fd, 4096);
-void* ptr = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-fcntl(fd, F_ADD_SEALS, F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE);
-```
-
-### 8.6.3 Binder 中的共享内存
-
-Binder 可传递 fd，因此大块数据通常通过 ashmem 或 memfd 共享，而不是直接塞进 Binder transaction。
+选择合适的工具取决于你正在调查的问题：
 
 ```mermaid
-sequenceDiagram
-    participant A as Process A
-    participant Binder as Binder Driver
-    participant B as Process B
+flowchart TD
+    Start["检测到内存问题"] --> Q1{"哪种类型的问题?"}
 
-    A->>A: memfd_create("data")
-    A->>A: mmap() + 写入数据
-    A->>Binder: 通过 Binder 发送 fd
-    Binder->>B: 投递 fd
-    B->>B: mmap(received_fd)
-    B->>B: 读取共享数据
-```
+    Q1 -->|"整体内存占用高"| DumpSys["dumpsys meminfo<br/>(系统全局概览)"]
+    Q1 -->|"单个应用占用过高"| AppDebug["dumpsys meminfo {pkg}<br/>(单个应用细分)"]
+    Q1 -->|"内存随时间逐渐增加"| ProcStats["procstats<br/>(长期趋势)"]
+    Q1 -->|"原生内存泄露"| NativeLeak["通过 Perfetto 使用 heapprofd<br/>(分配回溯)"]
+    Q1 -->|"Java/Kotlin 内存泄露"| JavaLeak["Android Studio Profiler<br/>或 hprof 转储"]
+    Q1 -->|"无法到达的原生分配"| Unreachable["libmemunreachable<br/>(保守 GC 扫描)"]
+    Q1 -->|"图形缓冲区泄露"| GraphicsLeak["dumpsys SurfaceFlinger<br/>+ dumpsys gpu"]
+    Q1 -->|"按映射细分"| ShowMap["showmap {pid}<br/>(smaps 分析)"]
+    Q1 -->|"实时系统监控"| Perfetto["Perfetto 追踪<br/>(sys_stats + process_stats)"]
+    Q1 -->|"共享库内存影响"| LibRank["librank<br/>(库内存排名)"]
 
-### 8.6.4 `SharedMemory` Java API
+    DumpSys --> Narrow["识别有问题的进程"]
+    Narrow --> AppDebug
+    AppDebug --> Q2{"原生堆还是<br/>托管堆?"}
+    Q2 -->|原生| NativeLeak
+    Q2 -->|托管| JavaLeak
 
-`android.os.SharedMemory` 对 Java 代码封装了 memfd：
-
-```java
-SharedMemory shm = SharedMemory.create("my-region", 4096);
-ByteBuffer buffer = shm.mapReadWrite();
-buffer.putInt(42);
-shm.setProtect(OsConstants.PROT_READ);
-parcel.writeParcelable(shm, 0);
-```
-
-### 8.6.5 Purgeable Memory
-
-ashmem 的一个特殊能力是 purgeable memory：unpin 后内核可以在压力下回收内容，重新 pin 时若返回 `ASHMEM_WAS_PURGED`，调用方需要重建数据。
-
-```mermaid
-graph TD
-    Pinned["PINNED<br/>数据保证有效"] -->|"ASHMEM_UNPIN"| Unpinned["UNPINNED<br/>可被回收"]
-    Unpinned -->|"ASHMEM_PIN success"| Pinned
-    Unpinned -->|"内核回收"| Purged["PURGED<br/>数据丢失"]
-    Purged -->|"ASHMEM_PIN returns WAS_PURGED"| Pinned
-```
-
-memfd 本身不直接替代 purgeable 语义，framework 通常通过显式 cache 管理实现类似效果。
-
-### 8.6.6 共享区域内存统计
-
-共享内存会带来统计问题：
-
-- **PSS**：共享页按映射进程数均摊。
-- **RSS**：每个进程都计算完整页。
-- **USS**：只统计某进程独占页。
-
-`dumpsys meminfo` 会分别展示这些指标。
-
-### 8.6.7 Ashmem 与 Memfd 对比
-
-| 特性 | Ashmem | Memfd |
-|---|---|---|
-| 内核支持 | Android 专用驱动 | 上游 Linux syscall |
-| 创建方式 | `open("/dev/ashmem")` + ioctl | `memfd_create()` |
-| sealing | 无 | 支持 |
-| purgeable | 支持 pin/unpin | 不直接支持 |
-| 推荐状态 | 兼容保留 | 新代码推荐 |
-
-### 8.6.8 内存映射模式
-
-共享内存通常使用 `mmap(MAP_SHARED)` 映射。只读消费者可使用 `PROT_READ`，生产者使用 `PROT_READ | PROT_WRITE`。对可执行映射应格外谨慎，Android 安全策略会尽量避免 writable + executable 内存。
-
----
-
-## 8.7 内存 Profiling
-
-### 8.7.1 `dumpsys meminfo`
-
-`dumpsys meminfo` 是 Android 最常用内存诊断入口：
-
-```bash
-adb shell dumpsys meminfo
-adb shell dumpsys meminfo <package-or-pid>
-```
-
-它展示 Dalvik heap、native heap、code、stack、graphics、private dirty、PSS、RSS、swap PSS 等指标。
-
-### 8.7.2 `procstats`
-
-`procstats` 记录进程随时间变化的内存状态，适合分析长期后台行为和进程生命周期内存占用：
-
-```bash
-adb shell dumpsys procstats
-```
-
-### 8.7.3 `heapprofd`（Perfetto Native Heap Profiling）
-
-`heapprofd` 是 Perfetto 的 native heap profiler，可以采样 native allocations 并关联调用栈。它适合定位 native 内存泄漏和高分配热点。
-
-```bash
-adb shell perfetto -c /data/misc/perfetto-configs/heapprofd.pbtx -o /data/misc/perfetto-traces/heap.pftrace
-adb pull /data/misc/perfetto-traces/heap.pftrace
-```
-
-### 8.7.4 `showmap`
-
-`showmap` 解析 `/proc/[pid]/smaps`，按映射区域展示 RSS、PSS、private/shared dirty/clean：
-
-```bash
-adb shell showmap <pid>
-adb shell showmap -a <pid>
-```
-
-### 8.7.5 `libmemunreachable`：Native 泄漏检测
-
-`libmemunreachable` 通过扫描 native heap、寄存器、栈和全局变量，寻找不可达但仍被分配的内存块。它适合 debug build 下定位 native 泄漏。
-
-相关源码：
-
-```text
-system/memory/libmemunreachable/MemUnreachable.cpp
-```
-
-### 8.7.6 Memory Profiling 决策树
-
-```mermaid
-graph TD
-    A["内存问题"] --> B{"Java heap 增长?"}
-    B -->|"Yes"| C["Android Studio Profiler / heap dump"]
-    B -->|"No"| D{"Native heap 增长?"}
-    D -->|"Yes"| E["heapprofd / malloc debug"]
-    D -->|"No"| F{"Graphics 增长?"}
-    F -->|"Yes"| G["dumpsys SurfaceFlinger / dmabufinfo"]
-    F -->|"No"| H{"PSS/RSS 异常?"}
-    H -->|"Yes"| I["showmap / smaps / meminfo"]
-    H -->|"No"| J["Perfetto memory counters"]
+    style NativeLeak fill:#4488cc,color:#fff
+    style JavaLeak fill:#4488cc,color:#fff
+    style Unreachable fill:#4488cc,color:#fff
 ```
 
 ### 8.7.7 理解内存指标
 
-| 指标 | 含义 |
-|------|------|
-| RSS | 驻留物理内存总量，共享页按完整页计入 |
-| PSS | Proportional Set Size，共享页均摊 |
-| USS | Unique Set Size，独占页 |
-| Private Dirty | 进程私有且已修改的页，最影响回收 |
-| Shared Clean | 可共享且干净的文件映射页 |
-| Swap PSS | 被换出页按比例分摊后的大小 |
+各种内存指标可能令人困惑。以下是每个指标的精确定义：
 
-### 8.7.8 阅读 `dumpsys meminfo` 输出
+```mermaid
+graph TD
+    subgraph "内存指标关系"
+        VSS["VSS (Virtual Set Size)<br/>总虚拟地址空间<br/>= 所有已映射区域<br/>包括未映射的预留"]
 
-阅读 meminfo 时应重点看：Dalvik Heap 是否持续增长、Native Heap 是否异常、Graphics 是否过高、Private Dirty 是否无法回收、Swap PSS 是否持续攀升，以及 TOTAL PSS 是否符合设备等级预期。
+        RSS["RSS (Resident Set Size)<br/>物理内存中的页面<br/>包含按完整大小计数的共享页"]
 
-### 8.7.9 Perfetto Memory Counters
+        PSS["PSS (Proportional Set Size)<br/>私有页完整计数<br/>+ 共享页在映射进程间均分"]
 
-Perfetto 可采集内存 counters，包括进程 RSS、oom_score_adj、LMK 事件、ion/dmabuf、zRAM、swap、page faults 等。它适合把内存变化和 UI jank、进程生命周期、GC、IO 放到同一条时间线上分析。
+        USS["USS (Unique Set Size)<br/>仅限私有页面<br/>= Private Clean + Private Dirty"]
 
-### 8.7.10 `/proc` 文件系统内存文件
+        SwapPSS["SwapPSS<br/>比例交换使用量<br/>与 PSS 相同，但针对<br/>已换出的页面"]
+    end
 
-常用 `/proc` 入口：
+    VSS -->|"减去未映射<br/>+ 请求分页"| RSS
+    RSS -->|"共享页比例计数"| PSS
+    PSS -->|"完全减去共享页"| USS
 
-```bash
-cat /proc/meminfo
-cat /proc/vmstat
-cat /proc/zoneinfo
-cat /proc/pressure/memory
-cat /proc/<pid>/smaps
-cat /proc/<pid>/status
-cat /proc/<pid>/oom_score_adj
+    style PSS fill:#44cc44,color:#000
 ```
+
+**PSS 是推荐使用的指标**，用于比较进程之间的内存占用，因为它能正确核算共享内存，且不会重复计数。
+
+| 指标 | 最适合用于 | 局限性 |
+|---|---|---|
+| **VSS** | 检测地址空间耗尽 | 极大地高估了实际内存使用量 |
+| **RSS** | 瞬时物理内存使用情况 | 重复计算了共享页 |
+| **PSS** | 进程间公平比较 | 计算缓慢（需要解析 smaps） |
+| **USS** | 理解私有内存成本 | 完全忽略了共享内存 |
+| **SwapPSS** | 理解总内存影响 | 仅在较新的内核上可用 |
 
 ---
 
-## 8.8 App 内存管理
+## 8.8 应用内存管理
 
-### 8.8.1 ActivityManager 内存裁剪
+### 8.8.1 ActivityManager 内存修剪 (Memory Trimming)
 
-framework 通过 `ComponentCallbacks2.onTrimMemory()` 通知应用释放内存。不同 level 表示不同压力和进程状态，例如 UI hidden、running low、running critical、background、moderate、complete。
+Android 框架通过 `ActivityManagerService` (AMS) 主动管理应用内存。当系统检测到内存压力时，AMS 会向应用程序发送 `onTrimMemory()` 回调，让它们在系统被迫杀死进程之前有机会释放缓存资源。
 
-应用应在回调中释放图片缓存、对象池、临时 buffer、可重建数据，而不是等待 lmkd 杀死进程。
+修剪级别定义在 `ComponentCallbacks2.java` 中：
 
-### 8.8.2 `AppProfiler`
+```java
+// frameworks/base/core/java/android/content/ComponentCallbacks2.java
 
-`AppProfiler` 位于 ActivityManagerService 内部，负责跟踪应用内存、触发 PSS 采样、维护进程 profile 信息，并把数据提供给系统决策和 dumpsys 输出。
+// 运行中的进程级别 (应用在前台或靠近前台)
+static final int TRIM_MEMORY_RUNNING_MODERATE = 5;   // 中度压力
+static final int TRIM_MEMORY_RUNNING_LOW = 10;        // 可用内存不足
+static final int TRIM_MEMORY_RUNNING_CRITICAL = 15;   // 危急，即将杀进程
 
-源码路径：
-
-```text
-frameworks/base/services/core/java/com/android/server/am/AppProfiler.java
+// 后台进程级别
+static final int TRIM_MEMORY_UI_HIDDEN = 20;          // UI 不再可见
+static final int TRIM_MEMORY_BACKGROUND = 40;          // 在后台 LRU 列表中
+static final int TRIM_MEMORY_MODERATE = 60;            // 在 LRU 列表中间
+static final int TRIM_MEMORY_COMPLETE = 80;            // 在 LRU 列表末尾
 ```
 
-### 8.8.3 `ProcessList` 与 OOM Adjustment
+```mermaid
+graph TD
+    subgraph "内存修剪级别"
+        direction TB
+        A["TRIM_MEMORY_RUNNING_MODERATE (5)<br/>系统处于中度压力下"]
+        B["TRIM_MEMORY_RUNNING_LOW (10)<br/>系统运行内存不足"]
+        C["TRIM_MEMORY_RUNNING_CRITICAL (15)<br/>系统即将开始杀死进程"]
+        D["TRIM_MEMORY_UI_HIDDEN (20)<br/>应用 UI 不再可见"]
+        E["TRIM_MEMORY_BACKGROUND (40)<br/>应用位于后台列表中"]
+        F["TRIM_MEMORY_MODERATE (60)<br/>应用位于列表正中间"]
+        G["TRIM_MEMORY_COMPLETE (80)<br/>应用位于列表末尾<br/>即将被杀"]
+    end
 
-`ProcessList` 管理 OOM adj 常量、阈值和进程优先级计算结果。AMS 计算出新的 adj 后，会把它同步给内核和 lmkd，使内存回收决策与用户可见状态一致。
+    A -->|"压力增加"| B -->|"压力增加"| C
+    D -->|"应用沿 LRU 下滑"| E -->|"应用沿 LRU 下滑"| F -->|"应用沿 LRU 下滑"| G
+
+    style A fill:#88cc88
+    style B fill:#cccc44
+    style C fill:#cc8844
+    style D fill:#cccccc
+    style E fill:#cc8844
+    style F fill:#cc4444
+    style G fill:#aa2222,color:#fff
+```
+
+### 8.8.2 AppProfiler
+
+`AppProfiler` 类 (`frameworks/base/services/core/java/com/android/server/am/AppProfiler.java`) 负责管理内存状态跟踪和修剪回调：
+
+```java
+// frameworks/base/services/core/java/com/android/server/am/AppProfiler.java
+
+public class AppProfiler {
+    // 定期调用以更新低内存状态
+    void updateLowMemStateLSP(int numCached, int numEmpty,
+                               int numTrimming, long now) {
+        // 确定当前内存状态
+        // 向相应的进程发送 TRIM_MEMORY 回调
+    }
+
+    // 修剪 UI 隐藏的进程
+    private void trimMemoryUiHiddenIfNecessaryLSP(ProcessRecord app) {
+        // 当应用失去可见性时发送 TRIM_MEMORY_UI_HIDDEN
+    }
+}
+```
+
+### 8.8.3 ProcessList 与 OOM 调整
+
+`ProcessList` 类管理进程重要性与 OOM 分值之间的映射：
+
+```java
+// frameworks/base/services/core/java/com/android/server/am/ProcessList.java
+
+public final class ProcessList {
+    // OOM 调整级别 (第 213-284 行)
+    public static final int CACHED_APP_MIN_ADJ = 900;
+    public static final int PERCEPTIBLE_APP_ADJ = 200;
+    public static final int VISIBLE_APP_ADJ = 100;
+    public static final int FOREGROUND_APP_ADJ = 0;
+
+    // lmkd 的默认 minfree 级别
+    private static final int[] mOomAdj = new int[] {
+        FOREGROUND_APP_ADJ, VISIBLE_APP_ADJ, PERCEPTIBLE_APP_ADJ,
+        PERCEPTIBLE_LOW_APP_ADJ, CACHED_APP_MIN_ADJ,
+        CACHED_APP_LMK_FIRST_ADJ
+    };
+
+    // 为进程设置 oom_adj
+    public static void setOomAdj(int pid, int uid, int amt) {
+        // 通过 lmkd 套接字写入 /proc/[pid]/oom_score_adj
+    }
+}
+```
 
 ### 8.8.4 AMS 如何与 lmkd 通信
 
-AMS 通过 lmkd socket 发送进程状态更新。每当进程启动、退出、adj 改变或状态变化时，AMS 会更新 lmkd 进程表。这保证 lmkd 选择 victim 时使用的是 framework 认可的进程重要性。
+当进程优先级发生变化时的通信流程：
+
+```mermaid
+sequenceDiagram
+    participant App as Activity 生命周期
+    participant AMS as Activity Manager
+    participant OomAdj as OomAdjuster
+    participant ProcList as ProcessList
+    participant LMKD as lmkd
+
+    App->>AMS: Activity 暂停/停止
+    AMS->>OomAdj: updateOomAdjLocked()
+    OomAdj->>OomAdj: 根据 Activity 状态计算新的 oom_adj
+    OomAdj->>ProcList: setOomAdj(pid, uid, newAdj)
+    ProcList->>LMKD: LMK_PROCPRIO 数据包<br/>(通过 Unix 套接字)
+    LMKD->>LMKD: 更新 adjslot_list 中的进程
+    LMKD->>LMKD: 写入 /proc/pid/oom_score_adj
+    LMKD->>LMKD: 设置 cgroup 软限制
+
+    Note over App,LMKD: 进程优先级现在反映了其当前的重要性
+```
 
 ### 8.8.5 内存限制与阈值
 
-应用内存上限由设备 RAM、`largeHeap`、ART heap growth limit、target SDK 和系统策略共同决定。开发者不应依赖 `largeHeap` 作为常规方案，它会提高单进程内存上限，但可能降低系统多任务能力。
+Android 对应用程序施加了多种内存限制：
+
+```mermaid
+graph TD
+    subgraph "单个应用内存限制"
+        DalvikLimit["dalvik.vm.heapsize<br/>(最大 Dalvik 堆, 如 512 MB)"]
+        GrowthLimit["dalvik.vm.heapgrowthlimit<br/>(默认堆限制, 如 256 MB)"]
+        LargeHeap["android:largeHeap=true<br/>(允许使用到 heapsize)"]
+        NativeLimit["无硬性限制<br/>(受限于系统 RAM 和<br/>lmkd 杀进程)"]
+    end
+
+    GrowthLimit -->|"应用请求<br/>largeHeap"| LargeHeap
+    LargeHeap --> DalvikLimit
+
+    subgraph "系统全局阈值"
+        CachedThresh["缓存应用阈值<br/>(通常 ~250 MB 剩余)"]
+        VisibleThresh["可见应用阈值<br/>(通常 ~100 MB 剩余)"]
+        ForegroundThresh["前台应用阈值<br/>(通常 ~75 MB 剩余)"]
+    end
+```
 
 ### 8.8.6 进程生命周期与内存
 
-进程生命周期与内存优先级紧密相关：前台进程最受保护，可见/可感知进程次之，service 与 cached 进程更容易被杀。cached 进程保留内存是为了提升下次启动速度，但在压力下会优先释放。
+了解进程生命周期状态如何映射到内存管理：
 
-### 8.8.7 App 开发者最佳实践
+```mermaid
+stateDiagram-v2
+    [*] --> Created: 进程从 Zygote fork
+    Created --> Foreground: Activity 启动/恢复
+    Foreground --> Visible: Activity 部分被遮挡
+    Visible --> Perceptible: 带有通知的服务
+    Perceptible --> Background: Activity 停止
+    Background --> Cached: 无活动组件
+    Cached --> Killed: lmkd 杀死
 
-- 实现 `onTrimMemory()` 并按 level 释放不同缓存。
-- 使用有界 `LruCache`，避免无限 bitmap cache。
-- 避免 static 持有 Activity/Context。
-- 控制线程数，优先使用线程池。
-- 及时关闭 Cursor、Bitmap、HardwareBuffer、file descriptor。
-- 用 heapprofd 或 Java heap dump 定位泄漏。
+    Foreground --> Background: onStop
+    Background --> Foreground: onRestart
+    Cached --> Foreground: onRestart
+    Background --> Cached: 所有组件停止
 
-### 8.8.8 ART GC 与内存
+    state Foreground {
+        [*] --> Active: oom_adj = 0
+        Active --> [*]: 仍在消耗内存
+        note right of Active: 全量内存访问<br/>无修剪回调
+    }
 
-ART 管理 Java/Kotlin heap，并根据分配速率、heap utilization、foreground/background 状态选择 GC 时机。GC 能回收托管对象，但无法直接回收 native allocations、graphics buffers 或未释放的 fd。混合 Java/native 应用必须同时关注 Dalvik heap 和 native heap。
+    state Cached {
+        [*] --> LowPriority: oom_adj = 900-999
+        LowPriority --> [*]: 杀进程候选者
+        note right of LowPriority: onTrimMemory COMPLETE<br/>应当释放一切
+    }
+
+    state Killed {
+        [*] --> Destroyed: 内存被回收
+        note right of Destroyed: 进程消失<br/>状态保存在 Bundle 中
+    }
+```
+
+### 8.8.7 ART 垃圾回收与内存
+
+Android Runtime (ART) 通过垃圾回收管理 Java/Kotlin 对象内存。
+
+- **堆空间**：包括 Main Space（大多数分配）、Large Object Space（> 12 KB 的对象）、Image Space（启动镜像类）和 Zygote Space（所有应用共享）。
+- **GC 算法**：
+    - **Concurrent Copying (CC)**：默认收集器，低停顿，具有压缩功能。
+    - **Concurrent Mark-Sweep (CMS)**：传统的非压缩收集器。
+
+ART 在应用进入后台时执行**压缩 GC**，以减少碎片并缩小内存占用。
+
+### 8.8.8 应用开发者的最佳实践
+
+应用开发者应当通过实现 `onTrimMemory()` 来主动释放资源：
+
+```java
+public class MyApplication extends Application {
+    @Override
+    public void onTrimMemory(int level) {
+        super.onTrimMemory(level);
+
+        if (level >= TRIM_MEMORY_COMPLETE) {
+            // 释放所有缓存数据
+            clearImageCache();
+            clearDatabaseCache();
+            releasePooledConnections();
+        } else if (level >= TRIM_MEMORY_MODERATE) {
+            // 释放大部分缓存数据
+            trimImageCacheToHalf();
+        } else if (level >= TRIM_MEMORY_BACKGROUND) {
+            // 释放非必要缓存数据
+            trimImageCacheToQuarter();
+        } else if (level >= TRIM_MEMORY_UI_HIDDEN) {
+            // UI 不再可见，释放 UI 相关资源
+            releaseLayoutInflaterCache();
+        }
+    }
+}
+```
+
+**关键准则：**
+1. **始终响应 `TRIM_MEMORY_UI_HIDDEN`**：这是你的应用不再可见的第一个信号。
+2. **渐进式释放**：不要在 `TRIM_MEMORY_BACKGROUND` 时释放所有内容，应用可能很快回到前台。
+3. **避免持有大型 Bitmap**：使用 `Bitmap.recycle()` 或让 GC 处理。
+4. **定期分析**：使用 `adb shell dumpsys meminfo <package>` 验证修剪回调是否生效。
 
 ---
 
-## 8.9 内核内存特性
+## 8.9 内核与底层内存特性
 
-### 8.9.1 KASAN（Kernel Address Sanitizer）
+### 8.9.1 KASAN (内核地址消毒剂)
 
-KASAN 是内核地址错误检测器，用于 debug 构建中发现 use-after-free、out-of-bounds 等内核内存错误。它开销较大，通常不用于量产构建。
+KASAN 检测内核代码中的越界访问和使用已释放内存 (UAF) 错误。它在 Android 调试/开发构建中启用。它通过维护一个“影子内存”区域来跟踪每个内存字节的有效性。
 
-### 8.9.2 MTE（Memory Tagging Extension）
+### 8.9.2 MTE (内存标签扩展)
 
-MTE 是 ARMv8.5 引入的硬件内存标记能力。它把指针 tag 与内存 tag 匹配，用于检测 use-after-free 和越界访问。Android 把 MTE 集成到内核、Bionic、Scudo、ART 和应用兼容策略中。
+ARM 的 **Memory Tagging Extension (MTE)** 是从 ARMv8.5 开始提供的硬件辅助内存安全特性。Android 是首个全系统采用 MTE 的主流平台。
 
-```mermaid
-graph LR
-    A["Pointer tag"] --> C{"tag match?"}
-    B["Memory allocation tag"] --> C
-    C -->|"Yes"| D["允许访问"]
-    C -->|"No"| E["MTE fault"]
-```
+MTE 为指针和内存分配分配一个 4 位的标签（0-15）。硬件在每次访问时检查指针标签是否与内存标签匹配。
+
+**MTE 模式：**
+- **同步 (Synchronous)**：违规时立即崩溃。用于测试和安全关键进程。
+- **异步 (Asynchronous)**：通过 SIGSEGV 延迟报告。用于生产环境监控，开销 < 1%。
 
 ### 8.9.3 GWP-ASan
 
-GWP-ASan 是低开销概率采样式内存错误检测器。它只对一小部分 allocation 使用 guard page，因此适合在生产环境中以较低概率启用，用于捕获真实用户环境中的 native heap bug。
+GWP-ASan 是一种概率性的内存错误检测器。与完整的 ASan 不同，它的开销极小，默认在生产环境的 Android 构建中启用。它通过随机选择少量分配并将其放置在受保护的页面中来捕捉溢出和 UAF。
 
-### 8.9.4 Scudo：Android Hardened Allocator
+### 8.9.4 Scudo：Android 的硬化分配器
 
-Scudo 是 Android 默认 native allocator。它提供 chunk header checksum、quarantine、随机化、double-free 检测、use-after-free 缓解等能力。Bionic 的 malloc dispatch 会默认落到 Scudo，也可被 malloc debug 或 profiling 机制替换。
+Scudo 是 Android 自 Android 11 起的默认内存分配器（取代了 jemalloc）。
+- **安全特性**：块头校验和、隔离区 (Quarantine)、随机化分配地址。
+- **性能特性**：每个线程的本地缓存 (lock-free)、基于大小类的分配。
 
-### 8.9.5 MTE 与 Android 内存栈集成
+### 8.9.5 KSM (内核同页合并)
 
-MTE 集成涉及硬件、内核、编译器、Bionic、Scudo、ART 和应用 manifest。系统可以按进程启用同步或异步 MTE fault 模式，并根据兼容性策略决定哪些应用启用。
-
-### 8.9.6 Kernel Same-page Merging（KSM）
-
-KSM 会扫描匿名页，找出内容相同的页面并合并为 CoW 页。它可以降低内存占用，但会消耗 CPU，也可能带来侧信道风险。因此 Android 上是否启用取决于设备策略。
-
-### 8.9.7 Transparent Huge Pages（THP）
-
-THP 使用更大的页减少 TLB miss，对大段连续内存访问有利。但它也可能增加内存碎片和 compaction 开销。Android 会根据 workload 和设备特性谨慎启用。
+KSM 扫描内存中内容相同的页面，并使用写时拷贝 (CoW) 将它们合并。这对 Android 很有利，因为多个应用实例或库可能存在相同的内存镜像。
 
 ---
 
-## 8.10 动手实践
-
-### 练习 52.1：观察 lmkd 行为
-
-```bash
-adb logcat -s lowmemorykiller lmkd ActivityManager
-adb shell cat /proc/pressure/memory
-adb shell cat /proc/meminfo
-```
-
-启动多个内存密集应用，观察 lmkd 日志中的 kill reason、pid、uid、oom_score_adj、RSS 和 swap。
-
-### 练习 52.2：用 `dumpsys` 分析内存
-
-```bash
-adb shell dumpsys meminfo
-adb shell dumpsys meminfo com.android.systemui
-```
-
-关注 TOTAL PSS、Private Dirty、Dalvik Heap、Native Heap 和 Graphics。
-
-### 练习 52.3：用 `heapprofd` 分析 native 内存
-
-```bash
-adb shell perfetto -c /data/misc/perfetto-configs/heapprofd.pbtx -o /data/misc/perfetto-traces/heap.pftrace
-adb pull /data/misc/perfetto-traces/heap.pftrace
-```
-
-用 Perfetto UI 打开 trace，定位 allocation callstack。
-
-### 练习 52.4：探索 zRAM
-
-```bash
-adb shell cat /proc/swaps
-adb shell cat /sys/block/zram0/mm_stat
-adb shell cat /sys/block/zram0/comp_algorithm
-```
-
-比较原始数据大小、压缩后大小和压缩比。
-
-### 练习 52.5：检测不可达内存
-
-使用支持的 debug build 运行 libmemunreachable 工具，检查 native heap 中无法从根集合到达的 allocation。
-
-### 练习 52.6：实验 Memory Cgroups
-
-```bash
-adb shell cat /proc/self/cgroup
-adb shell ls /dev/memcg
-adb shell cat /proc/<pid>/cgroup
-```
-
-观察不同进程类别进入的 cgroup。
-
-### 练习 52.7：监控图形内存
-
-```bash
-adb shell dumpsys SurfaceFlinger
-adb shell dumpsys meminfo | grep -i graphics
-adb shell dmabuf_dump 2>/dev/null || true
-```
-
-### 练习 52.8：触发并观察 `onTrimMemory`
-
-编写测试应用实现 `ComponentCallbacks2.onTrimMemory()`，用压力工具或多任务切换触发不同 trim level，并记录释放缓存前后的内存变化。
-
-### 练习 52.9：在支持硬件上检查 MTE
-
-```bash
-adb shell getprop | grep -i mte
-adb shell cat /proc/cpuinfo | grep -i mte
-```
-
-### 练习 52.10：用 Perfetto 跟踪内存
-
-采集包含 process stats、memory counters、LMK events、sched 和 heap profile 的 trace，把 kill 事件与 PSI、RSS、UI 卡顿关联起来分析。
-
-### 练习 52.11：分析 DMA-BUF 分配
-
-```bash
-adb shell dumpsys SurfaceFlinger
-adb shell cat /sys/kernel/debug/dma_buf/bufinfo 2>/dev/null
-```
-
-### 练习 52.12：实时调查进程 OOM 分数
-
-```bash
-while true; do
-  adb shell 'for p in /proc/[0-9]*; do [ -f $p/oom_score_adj ] && echo $(basename $p) $(cat $p/oom_score_adj) $(cat $p/comm); done | sort -nk2 | tail'
-  sleep 2
-done
-```
-
-### 练习 52.13：比较内存指标
-
-选择一个进程，对比 `dumpsys meminfo`、`showmap`、`/proc/[pid]/status` 和 `/proc/[pid]/smaps` 中的 RSS、PSS、Private Dirty。
-
-### 练习 52.14：构建内存压力实验
-
-创建逐步分配 Java heap、native heap 和 graphics buffer 的测试应用，分别观察 GC、onTrimMemory、zRAM 增长和 lmkd kill。
-
-### 练习 52.15：调查 lmkd Kill 历史
-
-```bash
-adb logcat -b events | grep -i lmk
-adb shell dumpsys activity lmk
-```
-
-### 练习 52.16：使用 memtest 做内存压力测试
-
-在测试设备上运行内存压力工具，观察 PSI、zRAM、kswapd、direct reclaim 和 lmkd 响应。不要在主力设备或生产设备上运行破坏性压力测试。
-
-### 练习 52.17：审计内存安全特性
-
-检查设备是否启用 Scudo、GWP-ASan、MTE、KASAN、KSM、THP、zRAM 和相关 kernel config。结合 `getprop`、`/proc/config.gz`、`/proc/cpuinfo` 和 linker/allocator 日志验证。
-
----
-
-## 总结
-
-Android 内存管理体现了几个核心原则：
-
-1. **主动优于被动。** lmkd 不等待内核 OOM killer 作为最后手段，而是主动监控压力并在系统进入危险状态前杀死低优先级进程。
-
-2. **按重要性杀进程。** OOM score 体系保护用户体验：前台应用受到保护，cached 后台进程优先牺牲。
-
-3. **协作式内存管理。** `onTrimMemory()` 给应用主动释放内存的机会，比杀进程更高效。
-
-4. **安全纵深防御。** MTE、GWP-ASan、KASAN 和 Scudo 提供重叠保护层，没有单一机制被孤立依赖。
-
-5. **软硬件协同设计。** MTE 需要硬件支持，但深度集成进 Scudo、compiler、kernel。DMA-BUF 也把硬件共享缓冲区能力和软件分配策略连接起来。
-
-6. **透明性与可观测性。** dumpsys、heapprofd、Perfetto、showmap、libmemunreachable 等工具确保内存行为可在各层被理解和调试。
-
-### 架构原则
-
-- 用 Zygote + CoW 最大化 framework 页共享。
-- 用 zRAM 延后 kill，但用 lmkd 防止 thrashing 损害交互性。
-- 用 cgroup 和 OOM adj 把内存决策与用户可见状态对齐。
-- 用 DMA-BUF 统一硬件共享 buffer 管理。
-- 用 profiling 工具让问题可定位、可量化。
-
-### 常见陷阱
-
-| 陷阱 | 症状 | 解决方式 |
-|---|---|---|
-| 未实现 `onTrimMemory()` | 后台频繁被杀 | 实现 trim callback 释放缓存 |
-| 持有 Activity 引用 | Dalvik heap 无界增长 | 使用 WeakReference，避免 static Activity 引用 |
-| Native 内存泄漏 | Native Heap 持续增长 | 使用 heapprofd 定位分配点 |
-| Bitmap cache 无上限 | Private Dirty 很高 | 使用有大小限制的 LruCache |
-| 后台服务过多 | 高 oom_adj 仍占内存 | 使用 WorkManager 替代常驻服务 |
-| JNI global ref 过大 | Non-moving space 增长 | 及时释放 global refs |
-| DMA-BUF 泄漏 | Graphics memory 增长 | Surface 销毁时释放 GraphicBuffer |
-| 线程栈累积 | 线程数导致 stack 内存增长 | 使用有界线程池 |
-
----
-
-## 关键源码文件参考
+## 8.10 关键源码文件参考
 
 | 组件 | 路径 |
 |---|---|
 | lmkd 主实现 | `system/memory/lmkd/lmkd.cpp` |
-| lmkd init 服务 | `system/memory/lmkd/lmkd.rc` |
 | lmkd 协议定义 | `system/memory/lmkd/include/lmkd.h` |
-| Process reaper | `system/memory/lmkd/reaper.cpp` |
-| Watchdog | `system/memory/lmkd/watchdog.cpp` |
-| Kill statistics | `system/memory/lmkd/statslog.h` |
-| PSI monitor library | `system/memory/lmkd/libpsi/psi.cpp` |
-| PSI header | `system/memory/lmkd/libpsi/include/psi/psi.h` |
-| ION allocator | `system/memory/libion/ion.c` |
-| DMA-BUF heap allocator | `system/memory/libdmabufheap/BufferAllocator.cpp` |
-| DMA-BUF heap include | `system/memory/libdmabufheap/include/BufferAllocator/BufferAllocator.h` |
-| GraphicBufferAllocator | `frameworks/native/libs/ui/GraphicBufferAllocator.cpp` |
-| GraphicBufferMapper | `frameworks/native/libs/ui/GraphicBufferMapper.cpp` |
-| GraphicBuffer header | `frameworks/native/libs/ui/include/ui/GraphicBuffer.h` |
-| libmemunreachable | `system/memory/libmemunreachable/MemUnreachable.cpp` |
-| showmap tool | `system/memory/libmeminfo/tools/showmap.cpp` |
-| procrank / librank | `system/memory/libmeminfo/tools/procrank.cpp` |
-| smapinfo library | `system/memory/libmeminfo/libsmapinfo/smapinfo.cpp` |
+| 进程收割者 (Reaper) | `system/memory/lmkd/reaper.cpp` |
+| 内存无法到达检测 | `system/memory/libmemunreachable/MemUnreachable.cpp` |
+| showmap 工具 | `system/memory/libmeminfo/tools/showmap.cpp` |
+| DMA-BUF 堆分配器 | `system/memory/libdmabufheap/BufferAllocator.cpp` |
 | ProcessList (Java) | `frameworks/base/services/core/java/com/android/server/am/ProcessList.java` |
-| AppProfiler (Java) | `frameworks/base/services/core/java/com/android/server/am/AppProfiler.java` |
-| ComponentCallbacks2 | `frameworks/base/core/java/android/content/ComponentCallbacks2.java` |
-| ActivityManagerService | `frameworks/base/services/core/java/com/android/server/am/ActivityManagerService.java` |
-| libdmabufinfo | `system/memory/libmeminfo/libdmabufinfo/` |
-| libmemevents | `system/memory/libmeminfo/libmemevents/` |
-| procmem tool | `system/memory/libmeminfo/tools/procmem.cpp` |
-| wsstop tool | `system/memory/libmeminfo/tools/wsstop.cpp` |
 
 ---
 
-## 延伸阅读
+## 8.11 延伸阅读
 
-### 内核文档
+- **Linux 内核文档**：`Documentation/admin-guide/mm/` —— 关于 zRAM, KSM, THP 的完整文档。
+- **Android 源码文档**：`system/memory/lmkd/README.md` —— lmkd 设计概述。
+- **Perfetto 文档**：`https://perfetto.dev/docs/data-sources/memory-counters`。
 
-- Linux 内核源码中的 `Documentation/admin-guide/mm/`：包含 zRAM、KSM、THP、hugetlbfs 等内存管理文档。
-- `Documentation/admin-guide/cgroup-v2.txt`：cgroup v2 memory controller 文档。
-- `Documentation/vm/`：内核 VM 子系统设计文档。
+---
 
-### Android 专用资源
+## 8.12 动手实践
 
-- `system/memory/lmkd/README.md`：lmkd 设计概览。
-- Perfetto 文档：`https://perfetto.dev/docs/data-sources/memory-counters`。
-- Android CDD：不同设备类别的内存要求。
+### 练习 8.1：观察 lmkd 的运行
 
-### 学术与行业参考
+在运行中的设备上监控 lmkd 行为：
+```shell
+# 1. 查看 lmkd 日志输出
+adb logcat -s lowmemorykiller:* lmkd:*
 
-- Mel Gorman 的 *Understanding the Linux Virtual Memory Manager*。
-- ARM Architecture Reference Manual 中关于 MTE 的章节。
-- LLVM 项目文档中的 Scudo Hardened Allocator 设计文档。
-- Google Project Zero 关于 MTE 部署和有效性的博客文章。
+# 2. 查看由 AMS 设置的 minfree 级别
+adb shell getprop sys.lmk.minfree_levels
 
-### 相关 AOSP 章节
+# 3. 实时监控 PSI 压力
+adb shell "while true; do cat /proc/pressure/memory; sleep 1; echo '---'; done"
+```
 
-- 第 4 章（Kernel）：内核启动流程与基础子系统。
-- 第 6 章（Bionic and Linker）：C 库 allocator（Scudo）细节。
-- 第 9 章（Graphics Render Pipeline）：GraphicBuffer 如何流经显示管线。
-- 第 19 章（ART Runtime）：GC 算法与托管堆内部机制。
-- 第 39 章（Power Management）：内存管理与 suspend、doze mode 的交互。
-- 第 46 章（Debugging Tools）：Perfetto 和 systrace 等调试技术。
+### 练习 8.2：使用 dumpsys 分析内存
+
+```shell
+# 1. 获取系统全局内存摘要
+adb shell dumpsys meminfo
+
+# 2. 挑选一个特定应用进行深度分析
+adb shell dumpsys meminfo com.android.systemui
+```
+
+### 练习 8.3：探索 zRAM
+
+```shell
+# 1. 查看 zRAM 压缩算法和磁盘大小
+adb shell cat /sys/block/zram0/comp_algorithm
+adb shell cat /sys/block/zram0/disksize
+
+# 2. 计算实际压缩率
+adb shell "mm_stat=\$(cat /sys/block/zram0/mm_stat); \
+  orig=\$(echo \$mm_stat | awk '{print \$1}'); \
+  compr=\$(echo \$mm_stat | awk '{print \$2}'); \
+  echo \"Ratio: \$(echo \"scale=2; \$orig / \$compr\" | bc):1\""
+```
+
+---
+
+## 总结 (Summary)
+
+Android 的内存管理是一个复杂的、跨层协作的系统，从硬件页表延伸到 Java 应用回调。
+
+**核心结论：**
+1. **lmkd 是守护者**：它通过 PSI 持续监控压力，在系统进入 OOM 之前果断杀进程。
+2. **OOM 分值决定生存**：系统建立了从原生守护进程到缓存应用的严格杀进程等级制度。
+3. **zRAM 扩展了容量**：通过内存内压缩，Android 设备能容纳比物理 RAM 更多的活跃数据。
+4. **安全性是内置的**：MTE, GWP-ASan 和 Scudo 提供了多层防御，防止内存破坏漏洞。
+
+### 架构原则
+- **主动优于被动**：在内核 OOM 发生之前，lmkd 就已经开始行动。
+- **重要性优先**：确保前台应用的体验，优先牺牲后台进程。
+- **协作管理**：通过 `onTrimMemory` 给予应用自救的机会。
+- **深度防御**：不依赖单一机制保护内存安全。

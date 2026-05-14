@@ -159,6 +159,18 @@ Soong 通过 `apex { ... }`、`prebuilt_apex { ... }` 等模块类型描述 APEX
 - 建立 loop / dm-verity / mount
 - 在失败时回滚
 
+#### 启动时激活流程
+
+APEX 激活发生在启动早期，`apexd` 解析预装与更新 APEX，校验签名和版本，准备 loop/dm-verity 挂载，并把激活结果写入系统可查询状态。
+
+#### dm-verity 表构建
+
+dm-verity 表把 APEX 镜像和完整性校验链绑定起来，使挂载后的内容可被内核持续验证。
+
+#### 文件系统挂载
+
+文件系统挂载把 APEX 内容暴露到 `/apex/<name>`，随后 framework、native linker 和服务启动逻辑才能消费其中的库、jar 与配置。
+
 ### 52.2.10 `OnBootstrap` 与 `OnStart`
 
 原文详细拆了 apexd 生命周期。关键点是：部分准备工作必须在系统引导早期完成，而真正激活、属性设置和状态推进会在后续阶段继续进行。
@@ -421,6 +433,22 @@ m com.android.example.apex dist
 - `derive_sdk` 测试
 - 模块相关 CTS
 
+#### 兼容性测试套件（CTS）
+
+CTS 确认模块更新后仍满足 Android 兼容性要求。
+
+#### Mainline 测试套件（MTS）
+
+MTS 专门覆盖 Mainline 模块边界、更新行为和模块 API 契约。
+
+#### 单元测试
+
+单元测试用于覆盖模块内部逻辑和服务实现细节。
+
+#### 测试映射（TEST_MAPPING）
+
+`TEST_MAPPING` 把源码变更与应运行的测试集合绑定起来，支撑模块级 CI。
+
 ### 52.6.5 在设备上安装与更新
 
 设备端可通过 staged session 安装更新后的 APEX，并在重启后生效。这一步是理解真实更新路径的关键。
@@ -507,6 +535,10 @@ Health Connect 强调本地统一存储与受控访问，这也符合 Mainline �
 
 这类高价值数据平台能力必须考虑备份恢复路径，否则模块独立演进会影响用户数据连续性。
 
+### 52.7.9 Key Source Paths
+
+HealthFitness 关键路径包括 Health Connect provider、permission controller 集成、FHIR 数据模型和备份导出相关实现。
+
 ## 52.8 深入分析：Profiling 模块
 
 ### 52.8.1 模块结构
@@ -536,6 +568,10 @@ trace 往往包含进程、线程、文件路径和运行行为，因此必须�
 ### 52.8.7 异常检测器
 
 原文中的 anomaly detector 表明模块不仅收集数据，还可能在平台侧直接做初步分析与触发判断。
+
+### 52.8.8 Key Source Paths
+
+Profiling 关键路径包括 profiling framework API、system_server 服务、trace 收集、限流和脱敏实现。
 
 ## 52.9 深入分析：UWB 模块
 
@@ -611,6 +647,10 @@ UCI（UWB Command Interface）层在当前实现里高度依赖 Rust 代码，�
 ### 52.9.8 国家码与监管
 
 无线能力必须受国家/地区监管限制控制，因此 `UwbCountryCode` 这类组件是协议栈不可缺少的一部分。
+
+### 52.9.9 Key Source Paths
+
+UWB 关键路径包括 framework ranging API、UWB service、UCI 协议栈、HAL 接口和 country code 管理逻辑。
 
 ## 52.10 动手实践
 
@@ -732,7 +772,15 @@ mkdir -p packages/modules/MyApex/apex
 
 然后补充 `Android.bp`、manifest、key 和最小内容，走完整构建链路验证自己的理解。
 
-## Summary
+### 52.10.17 创建一个最小测试 APEX
+
+最小测试 APEX 应包含 manifest、Android.bp、签名配置和一个可验证的 payload，用于理解 Soong 到 apexer 再到设备激活的完整路径。
+
+### 52.10.18 Trace derive_sdk Boot Behavior
+
+`derive_sdk` 在启动期间计算 extension version 和模块 API 可见性。追踪该路径有助于理解 Mainline 模块如何影响 framework API 行为。
+
+## 小结
 
 Mainline Modules 是 Android 平台更新模型的一次基础性重构。它把一部分过去只能随整机 OTA 更新的系统组件拆成了可独立交付、可校验、可挂载、可回滚的模块，让平台能力和安全修复能以比传统固件更快的节奏分发到设备。
 
@@ -746,7 +794,15 @@ Mainline Modules 是 Android 平台更新模型的一次基础性重构。它把
 - Mainline 模块开发比普通 APK 更接近平台工程：需要处理 key、签名、Soong 规则、测试套件、设备端 staged 安装与日志诊断。
 - HealthFitness、Profiling 和 UWB 这些深入案例说明，Mainline 不再只是“补丁分发机制”，而是平台能力演进的正式承载体。
 
-### 关键源码路径
+### 架构回顾
+
+Mainline 模块把系统关键组件从整机 OTA 中拆出，通过 APEX/APK、稳定 API、签名和回滚机制实现可更新交付。
+
+### 关键数据路径
+
+关键数据路径包括 APEX 激活、SDK extension 推导、模块服务注册、回滚状态记录和模块测试数据流。
+
+### 关键源码文件
 
 | 组件 | 路径 |
 |---|---|

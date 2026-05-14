@@ -935,7 +935,7 @@ drm.setOnSessionLostStateListener((md, sessionId) -> {
 
 沿这条线读下来，基本就能把 “UUID 校验 -> session 创建 -> key request -> JWK 响应 -> AES-CTR 解密” 整个流程串起来。
 
-## Summary
+## 小结
 
 Android DRM 架构的核心，不是某个单独 API，而是多层隔离后的统一内容保护体系：应用通过 `MediaDrm` 和 `MediaCrypto` 与 framework 交互，framework 再通过 `DrmHal` / `CryptoHal` 把控制面和数据面路由到具体 HAL 插件，最终依赖 vendor DRM 实现和 TEE / 安全解码路径完成真正的密钥保护与内容解密。
 

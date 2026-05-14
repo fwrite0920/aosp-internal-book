@@ -832,7 +832,7 @@ adb pull /sdcard/a11y-trace.trace
 - Binder 节点查询成本
 - 深层 View 树带来的遍历压力
 
-## Summary
+## 小结
 
 Android 无障碍框架展示了 AOSP 很典型的一种优雅设计：以 `AccessibilityManagerService` 为中心，由系统服务在应用和辅助技术之间做集中协调，再通过丰富的事件协议、节点树协议和输入转换管线，让平台功能与第三方服务都能在统一边界内协作。
 
@@ -845,7 +845,7 @@ Android 无障碍框架展示了 AOSP 很典型的一种优雅设计：以 `Acce
 - 安全模型必须在“让服务足够强大”和“防止其变成通用监控 / 注入通道”之间保持平衡。
 - `Settings.Secure`、shell 命令、tracing 和 `UiAutomation` 为调试和自动化测试提供了非常直接的入口。
 
-### 关键源码路径
+## 关键源码文件参考
 
 | 文件 | 作用 |
 |---|---|

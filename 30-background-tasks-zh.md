@@ -547,7 +547,7 @@ Android 鼓励替代路径：
 
 部分广播被系统保护，第三方应用不能随意发送，避免伪造系统事件扰乱后台策略。
 
-## 30.7 动手实践（Try It）
+## 30.7 动手实践
 
 ### 30.7.1 练习：检查 JobScheduler 状态
 
@@ -837,35 +837,3 @@ flowchart TD
 | `ThermalStatusRestriction` | `frameworks/base/apex/jobscheduler/service/java/com/android/server/job/restrictions/ThermalStatusRestriction.java` |
 | `AlarmManagerService` | `frameworks/base/apex/jobscheduler/service/java/com/android/server/alarm/AlarmManagerService.java` |
 | `JobSchedulerInternal` | `frameworks/base/apex/jobscheduler/framework/java/com/android/server/job/JobSchedulerInternal.java` |
-
----
-
-## 总结（Summary）
-
-Android 的后台任务调度体系，本质上是在“应用希望随时做事”和“系统必须统一管理续航”之间建立秩序。今天的 Android 已经不再允许应用随意常驻后台，而是要求应用把后台工作交给系统调度器，根据优先级、时机、约束和用户可见性来决定执行方式。
-
-本章关键点如下：
-
-1. **后台限制是现代 Android 的前提条件**：从 Android 8.0 开始，后台服务、隐式广播、后台拉起和精确闹钟都被持续收紧。
-2. **JobScheduler 是平台级后台任务原语**：约束控制器、quota 和并发管理共同决定任务什么时候真正运行。
-3. **AlarmManager 只适合时间点强相关任务**：它不是通用后台执行器，尤其 exact alarm 在新版本上限制很严。
-4. **WorkManager 是应用开发的首选抽象层**：它在 JobScheduler 之上补齐了持久化、链式任务、状态观察与兼容性。
-5. **前台服务是后台执行特权，不是逃逸通道**：新版本要求类型声明、通知可见、启动时机合规，并不断加强超时与审计。
-6. **广播限制解决的是系统级唤醒风暴问题**：manifest 静态隐式广播大幅收缩后，Android 把事件监听导向更精确、更按需的机制。
-7. **App Standby Bucket 决定后台预算**：应用最近是否被用户使用，直接影响其 job、alarm 和后台执行配额。
-
-### 关键源码文件参考
-
-| 文件 | 作用 |
-|------|------|
-| `frameworks/base/apex/jobscheduler/service/java/com/android/server/job/JobSchedulerService.java` | JobScheduler 服务端核心 |
-| `frameworks/base/apex/jobscheduler/service/java/com/android/server/job/JobStore.java` | Job 持久化 |
-| `frameworks/base/apex/jobscheduler/service/java/com/android/server/job/JobConcurrencyManager.java` | Job 并发调度 |
-| `frameworks/base/apex/jobscheduler/service/java/com/android/server/job/JobServiceContext.java` | Job 与应用 `JobService` 执行上下文 |
-| `frameworks/base/apex/jobscheduler/service/java/com/android/server/job/controllers/JobStatus.java` | Job 内部状态表示 |
-| `frameworks/base/apex/jobscheduler/service/java/com/android/server/job/controllers/StateController.java` | 控制器基类 |
-| `frameworks/base/apex/jobscheduler/service/java/com/android/server/alarm/AlarmManagerService.java` | AlarmManager 服务端 |
-| `frameworks/base/core/java/android/app/job/JobInfo.java` | Job 声明模型 |
-| `frameworks/base/core/java/android/app/job/JobScheduler.java` | JobScheduler 客户端 API |
-| `frameworks/base/core/java/android/app/AlarmManager.java` | AlarmManager API |
-| `androidx.work` 相关源码（外部库） | WorkManager 实现 |

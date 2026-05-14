@@ -569,7 +569,7 @@ graph TB
     style HEAP_DEV fill:#c8e6c9
 ```
 
-#### DMA-BUF Heaps 的工作方式
+#### DMA-BUF Heap 工作方式
 
 1. **Heap 注册**：内核驱动向 DMA-BUF heap 框架注册 heap，每个 heap 都会以字符设备形式出现在 `/dev/dma_heap/` 下。
 
@@ -630,7 +630,7 @@ graph TB
     style MP fill:#fff9c4
 ```
 
-#### FUSE Passthrough 如何工作
+#### FUSE Passthrough 工作方式
 
 FUSE passthrough 允许 FUSE 守护进程（MediaProvider）告诉内核，某些文件操作可以直接由内核处理，从而绕过 FUSE 用户态守护进程的数据搬运路径：
 
@@ -862,7 +862,7 @@ int init_psi_monitor(enum psi_stall_type stall_type,
 
 **来源**：`system/memory/lmkd/libpsi/psi.cpp`
 
-#### OOM Adjustment 分数
+#### OOM 调整分数
 
 lmkd 从 `system_server` 中的 ActivityManager 接收进程优先级信息。每个进程都会被赋予一个 OOM adjustment 分数，用来表示其重要性：
 
@@ -909,7 +909,7 @@ CONFIG_DM_VERITY=y
 
 dm-verity 通过为整个分区维护一棵哈希树（Merkle tree）工作。每次读取时，驱动都会计算数据块的哈希，并和哈希树中的值比对。校验失败时，读取会返回 I/O 错误。
 
-#### dm-verity 的 Merkle 树如何工作
+#### dm-verity Merkle 树工作方式
 
 ```mermaid
 graph TB
@@ -989,7 +989,7 @@ CONFIG_FS_VERITY=y               # 按文件完整性校验（fs-verity）
 CONFIG_BLK_INLINE_ENCRYPTION=y   # 块级 inline encryption
 ```
 
-#### File-Based Encryption（FBE）
+#### 基于文件的加密（FBE）
 
 Android 使用的是基于文件的加密，而不是整盘加密。这样不同文件可以用不同密钥加密，也就支持了诸如 Direct Boot 这样的能力：设备在用户解锁前也能显示锁屏、接收来电等。
 
@@ -1044,7 +1044,7 @@ CONFIG_BPF_JIT_ALWAYS_ON=y
 - CPU 频率跟踪
 - 追踪与性能分析
 
-#### Android 上的 eBPF 架构
+#### Android eBPF 架构
 
 ```mermaid
 graph TB
@@ -2314,7 +2314,7 @@ system/core/debuggerd/
 
 **来源**：`system/core/debuggerd/`
 
-#### debuggerd 的工作方式
+#### debuggerd 工作方式
 
 ```mermaid
 sequenceDiagram

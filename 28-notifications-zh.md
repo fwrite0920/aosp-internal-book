@@ -484,6 +484,26 @@ stateDiagram-v2
 `CriticalNotificationExtractor`
 : 标记关键系统/车机场景通知，使其能排在顶端。
 
+#### NotificationChannelExtractor
+
+#### NotificationAdjustmentExtractor
+
+#### BubbleExtractor
+
+#### ValidateNotificationPeople
+
+#### PriorityExtractor
+
+#### ZenModeExtractor
+
+#### ImportanceExtractor
+
+#### VisibilityExtractor
+
+#### BadgeExtractor
+
+#### CriticalNotificationExtractor
+
 ### 28.4.6 Ranking Reconsideration
 
 某些计算不能同步完成，例如联系人解析。这时 extractor 可以返回 `RankingReconsideration`。它会在 ranking 线程异步跑完，再触发重新排序和排名更新通知。
@@ -1035,7 +1055,7 @@ graph TB
     NLS --> BubbleMgr
 ```
 
-## 28.10 动手实践（Try It）
+## 28.10 动手实践
 
 ### 28.10.1 用 ADB 查看活跃通知
 

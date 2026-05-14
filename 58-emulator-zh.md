@@ -148,6 +148,38 @@ Emulator 真正“像设备”的关键，不只在 QEMU，也在 guest 侧 HAL�
 
 这些 HAL 并不是“空实现”。它们负责把 Android framework 的硬件接口请求转成与宿主 emulator 虚拟设备通信的协议。
 
+#### 58.2.3.1 Audio HAL
+
+Goldfish audio HAL 把 guest 音频请求转接到 host 侧音频设备或模拟后端。
+
+#### 58.2.3.2 Camera HAL
+
+Camera HAL 通过模拟设备或 host bridge 提供摄像头能力，供 CameraService 枚举和测试。
+
+#### 58.2.3.3 Sensors HAL
+
+Sensors HAL 负责把 host 注入的传感器事件转成 Android sensor event。
+
+#### 58.2.3.4 GNSS HAL
+
+GNSS HAL 支持通过 emulator 控制台或 host 工具注入定位数据。
+
+#### 58.2.3.5 Radio (Telephony) HAL
+
+Radio HAL 模拟蜂窝网络、SIM、短信和基础电话状态。
+
+#### 58.2.3.6 Fingerprint HAL
+
+Fingerprint HAL 支持在测试环境中模拟指纹认证事件。
+
+#### 58.2.3.7 Hardware Composer (HWC3) HAL
+
+HWC HAL 将 guest 合成请求映射到 host 图形窗口和渲染后端。
+
+#### 58.2.3.8 Gralloc (Graphics Allocator) HAL
+
+Gralloc HAL 管理 guest 图形缓冲分配，并与 goldfish/host 图形路径协同。
+
 ### 58.2.4 Init 脚本
 
 `init.ranchu.rc` 和相关 shell 脚本负责在 guest 启动阶段搭起 emulator 所需环境，例如：
@@ -354,6 +386,14 @@ Cuttlefish 对 guest kernel 的 virtio 模块依赖更明确，这也解释了�
 
 Cuttlefish 广泛使用 `crosvm` 路线，这让它和 Android 虚拟化、VirtIO 生态以及更现代的 host / guest 设备模型靠得更近。
 
+#### Virtio 设备映射
+
+Virtio 设备映射描述 guest 中的块设备、网络、控制台、vsock、GPU 等虚拟硬件。
+
+#### PCI Slot 分配
+
+PCI slot 分配让 guest 能以稳定拓扑发现虚拟设备，便于 HAL 和驱动绑定。
+
 ### 58.6.11 Vhost-User 设备模型
 
 Vhost-user 让某些设备功能可以从单体 VMM 中拆出去，以更模块化的宿主微服务实现。
@@ -366,13 +406,37 @@ HVC 端口承担 guest 和 host 之间多条控制通路，理解它对排查 Cu
 
 Cuttlefish 也支持图形与显示，但组织方式比传统 emulator 更偏服务化和可远程访问。
 
+#### 显示架构
+
+显示架构把 guest 渲染、virtio-gpu、host compositor 和窗口输出串在一起。
+
 ### 58.6.14 网络架构
 
 Cuttlefish 的网络模型支持多实例与更复杂的宿主编排，因此比单机 emulator 的 NAT 模型更工程化。
 
+#### TAP 设备与 Bridge 配置
+
+TAP 与 bridge 配置决定 guest 网络如何接入 host 和外部网络。
+
+#### Wi-Fi 模拟
+
+WiFi 模拟向 Android framework 暴露无线网络语义，但底层仍由 host 虚拟网络承载。
+
+#### vhost-net 加速
+
+vhost-net 可把部分网络数据路径下沉到 host kernel，提高吞吐并降低开销。
+
 ### 58.6.15 Guest HAL
 
 它依然需要 guest 侧 HAL 承接 Android framework 语义，只是 host 侧后端实现与 orchestration 更复杂。
+
+#### 示例：通过 Vsock 实现 Camera HAL
+
+Camera HAL 可以通过 vsock 与 host 服务通信，获取模拟摄像头帧或控制信息。
+
+#### 示例：通过 Vsock 实现 Light HAL（Rust）
+
+Light HAL 示例展示了用 Rust 和 vsock 实现轻量 host-guest HAL 通道的模式。
 
 ### 58.6.16 Host 微服务编排
 
@@ -441,7 +505,7 @@ AVD 目录中的 `config.ini` 等文件，和 product / Board 配置一起共同
 
 Thread 网络相关组件同样可以被打包进 emulator image，用于 IoT / Matter 等测试。
 
-## 58.8 Try It: Build and Launch a Custom Emulator Image
+## 58.8 动手实践：构建并启动自定义模拟器镜像
 
 ### 58.8.1 构建 emulator system image
 
@@ -497,6 +561,18 @@ adb devices
 - 覆盖 system property
 - 调整显示与特性配置
 
+#### 添加自定义 HAL
+
+添加自定义 HAL 时，需要更新产品包列表、VINTF manifest、init 服务和 SELinux 策略。
+
+#### 修改 Init 行为
+
+修改 init 行为通常涉及 rc 文件、属性触发器和服务 class。
+
+#### 修改 SELinux Policy
+
+SELinux 变更需要同时处理 domain、file_contexts、service_contexts 和 neverallow 约束。
+
 ### 58.8.5 调试 emulator
 
 ```bash
@@ -528,6 +604,22 @@ adb shell ping -c 4 8.8.8.8
 adb shell dumpsys wifi
 ```
 
+#### 内核日志
+
+内核日志适合排查启动、驱动、virtio 和底层硬件模拟问题。
+
+#### HAL 调试
+
+HAL 调试通常结合 `lshal`、`dumpsys`、logcat 和 VTS。
+
+#### GPU 调试
+
+GPU 调试关注 host GPU 模式、EGL/Vulkan、HWC、gralloc 和帧时间。
+
+#### 网络调试
+
+网络调试关注 adb、redir、slirp/vhost、DNS 和 guest 路由。
+
 ### 58.8.6 性能调优
 
 ```bash
@@ -541,6 +633,18 @@ emulator -memory 6144 -cores 8
 - 选择合适 GPU 后端：host / ANGLE / SwiftShader / guest
 - 使用 SSD 存储 AVD 目录
 - 关注 ZRAM 与随机 I/O
+
+#### CPU 与内存
+
+CPU 与内存调优影响 boot time、测试吞吐和多实例密度。
+
+#### GPU 加速
+
+GPU 加速模式决定图形路径性能和兼容性。
+
+#### 磁盘性能
+
+磁盘镜像、快照和 host 文件系统会影响 I/O 密集型测试。
 
 ### 58.8.7 多实例运行
 
@@ -559,6 +663,14 @@ emulator -read-only &
 emulator -port 5556 -read-only &
 emulator -port 5558 -read-only &
 ```
+
+#### 模拟器（Emulator）
+
+多 emulator 实例需要隔离端口、数据目录、ADB serial 和图形资源。
+
+#### 虚拟设备（Cuttlefish）
+
+Cuttlefish 多实例强调 host orchestrator、实例目录和虚拟网络隔离。
 
 ### 58.8.8 使用自定义 kernel
 
@@ -657,7 +769,7 @@ avd snapshot load mysnap
 avd snapshot list
 ```
 
-## Summary
+## 小结
 
 Android Emulator 不是一层 UI 壳子，而是一整套完整的虚拟设备平台：
 
@@ -670,7 +782,7 @@ Android Emulator 不是一层 UI 壳子，而是一整套完整的虚拟设备�
 
 从系统工程角度看，emulator 最重要的价值不是“能跑 Android”，而是它让 Android 在没有物理硬件时，仍然保有一台结构完整、可脚本化、可调试、可扩展的虚拟设备。
 
-### Key Source Files Reference
+### 关键源码文件参考
 
 | 文件 | 作用 |
 |---|---|

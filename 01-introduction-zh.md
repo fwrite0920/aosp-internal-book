@@ -237,7 +237,7 @@ Android 内核并不是原味 Linux。它包含多个 Android 特有子系统与
 | **dm-verity** | Verified boot 机制，用于确保系统分区未被篡改。 | `drivers/md/dm-verity*` |
 | **SELinux** | 强制访问控制。Android 使用严格的 SELinux 策略约束每个进程。 | 策略：`system/sepolicy/` |
 
-#### Generic Kernel Image（GKI）
+#### 通用内核镜像（GKI）
 
 从 Android 12 开始，Google 引入 **GKI** 架构来解决内核碎片化问题。其核心思路如下：
 
@@ -778,7 +778,7 @@ AOSP 在 `packages/apps/` 中自带了大量系统应用：
 
 SystemUI 值得特别强调，因为它并不是一个典型应用。它是一个具有系统特权的进程，负责核心系统界面框架：状态栏、通知下拉、快速设置面板、锁屏、音量对话框、电源菜单、画中画控制、最近任务界面（某些配置下）等。它运行在独立进程 `com.android.systemui` 中，拥有提升后的权限，并与 `WindowManagerService` 及其他系统服务深度耦合。
 
-#### Content Provider
+#### 内容提供者
 
 AOSP 还在 `packages/providers/` 中提供了一系列系统内容提供者：
 
@@ -1927,31 +1927,6 @@ timeline
                           : Adaptive layouts mandate
 ```
 
-### 1.6.3 API Level 增长
-
-Android SDK 中公开 API 的数量一直在快速增长：
-
-| 版本 | 公开 API 数量（约） | 代表性新增内容 |
-|---|---|---|
-| API 1（1.0） | ~2,000 | 基础能力：Activity、View、Intent、ContentProvider |
-| API 8（2.2） | ~5,000 | Backup、Cloud-to-Device Messaging |
-| API 14（4.0） | ~10,000 | ActionBar、Fragments（手机侧）、Social API |
-| API 21（5.0） | ~18,000 | Material Design、Camera2、JobScheduler、ART |
-| API 26（8.0） | ~25,000 | Autofill、NNAPI、Notification Channels |
-| API 29（10） | ~30,000 | 深色主题、Scoped Storage、BiometricPrompt |
-| API 33（13） | ~35,000 | Photo picker、应用级语言、主题图标 |
-| API 35（15） | ~40,000+ | Satellite API、Private space、Health Connect |
-| API 36（16） | ~45,000+ | 16 KB page size、Live Updates、Predictive back |
-
-每个 API level 都严格包含前一个版本的全部能力（极少数废弃 API 最终会被移除）。这些 API 由 Metalava 维护的签名文件定义：
-
-- `current.txt`：公开 API 签名
-- `system-current.txt`：System API（供特权应用使用）
-- `module-lib-current.txt`：Module library API（供 Mainline 模块使用）
-- `test-current.txt`：Test API
-
----
-
 ## 1.7 开发者之旅：本书路线图
 
 使用 AOSP 是一段逐步深入的旅程：从下载源码开始，逐渐进入理解、修改、构建、测试和向上游贡献。本节梳理典型开发路径，并将其映射到本书的章节安排中。
@@ -2714,31 +2689,21 @@ $ source build/envsetup.sh       # Set up build environment
 | **GKI** | Generic Kernel Image |
 | **GSI** | Generic System Image |
 
----
+### 1.10.6 将本书用于 AI 助手
 
-## 1.11 Summary
+每一章都是普通 Markdown，并带有明确的源码文件引用。这使本书非常适合作为 AI 助手推理 AOSP 代码时的背景材料。
 
-本章建立了理解与操作 AOSP 所需的基础知识：
+如果要避免让助手抓取整个站点，可以直接把它指向 <https://aospbooks.github.io/aosp-internal-book/llms.txt>。这是一个 [llmstxt.org](https://llmstxt.org/) 风格的索引，按 Part 分组列出每一章和附录，并为每项提供一句描述及发布 URL。助手可以先读取 `llms.txt`，判断你的问题对应哪个子系统章节，然后只抓取该章节，从而节省 token 并给出更精准的答案。
 
-1. **AOSP 是 Android 生态的开源底座。** Google 在其上叠加 GMS（专有层），OEM 在其上增加定制，社区则在其上构建替代发行版。明确你所在的层，是一切平台工作的起点。
+实用工作流：
 
-2. **Android 的架构是清晰分层的技术栈。** 它从 Linux 内核开始，向上经过 HAL、原生服务、ART 运行时、framework 服务（system_server）、公开 API，最终到达应用层。每一层都有明确职责，并通过稳定接口与相邻层通信。
-
-3. **源码树虽然庞大，但组织良好。** 30+ 个顶层目录各司其职：`art/` 存放运行时，`bionic/` 存放 C 库，`frameworks/` 存放应用框架，`hardware/` 存放 HAL 接口，`system/` 存放核心系统组件，`packages/` 存放应用与模块，`build/` 存放构建系统，等等。
-
-4. **Android 生态是一种协作结构。** Google 负责 framework、CTS、Mainline；SoC 厂商负责内核、HAL 与驱动；OEM 负责定制与设备 bring-up；社区则贡献自定义 ROM、问题反馈与补丁。
-
-5. **Android 在 15+ 年、35 个 API level 中经历了剧烈演进。** 关键架构转折包括 Dalvik 向 ART 的切换、Project Treble 带来的 vendor 分离、Project Mainline 带来的模块化更新，以及 GKI 带来的内核标准化。
-
-6. **开发者的旅程** 起始于源码下载与构建，随后进入架构理解，再进阶到修改、测试与贡献平台。
-
-7. **核心术语**，例如 Binder、HAL、AIDL、HIDL、APEX、Mainline、ART、Zygote、system_server、SurfaceFlinger、WMS、AMS、PMS，是 AOSP 开发的基本词汇。你会在本书后续每一章中反复遇见它们。
-
-下一章，我们会真正卷起袖子，搭建完整的 AOSP 开发环境：安装依赖、下载源码、配置构建，并在模拟器中跑出第一版系统。
+- **把 URL 放入 system prompt 或项目上下文。** 大多数编码助手（Claude Code、Cursor、Copilot Workspace、Aider）都接受任意 URL 作为背景材料。`llms.txt` 很小（约 15 KB），因此可以轻松放入上下文。
+- **按小节编号引用章节。** `9.4.2` 这样的章节编号在编辑中保持稳定，因此当你或助手想引用特定主题时，小节编号就是一个持久句柄。
+- **配合 `cs.android.com` 使用。** 本书中的源码路径和行号可以直接在 Android Code Search 上解析，因此助手可以沿着路径验证或扩展书中的任何论断。
 
 ---
 
-## 1.12 Further Reading
+## 1.11 延伸阅读
 
 - **AOSP Source**: https://source.android.com/
 - **AOSP Code Search**: https://cs.android.com/
@@ -2755,9 +2720,22 @@ $ source build/envsetup.sh       # Set up build environment
 
 ---
 
-*下一章：第 2 章 -- 搭建开发环境*
+## 1.12 总结
 
-*
+本章建立了理解与操作 AOSP 所需的基础知识：
 
- 搭建开发环境*
+1. **AOSP 是 Android 生态构建其上的开源基础。** Google 添加 GMS（专有层），OEM 添加定制，社区构建替代发行版。理解自己工作所在的层至关重要。
 
+2. **Android 的架构是分层栈。** 它从 Linux 内核开始，向上经过 HAL、native 服务、ART 运行时、framework 服务（system_server）、公开 API，最终到达应用。每一层都有明确职责，并通过清晰定义的接口连接相邻层。
+
+3. **源码树庞大但有组织。** 30 多个顶层目录各有用途：`art/` 存放运行时，`bionic/` 存放 C 库，`frameworks/` 存放应用框架，`hardware/` 存放 HAL 接口，`system/` 存放核心系统组件，`packages/` 存放应用和模块，`build/` 存放构建系统，等等。
+
+4. **Android 生态是一种协作。** Google 负责 framework、CTS、Mainline；SoC 厂商负责内核、HAL 和驱动；OEM 负责定制和设备 bring-up；社区负责自定义 ROM、问题报告和贡献。
+
+5. **Android 在 15 多年和 35 个 API level 中发生了显著演进。** 主要架构变化包括从 Dalvik 转向 ART、Project Treble 实现 vendor 分离、Project Mainline 实现模块化更新，以及 GKI 推动内核标准化。
+
+6. **开发者旅程** 从下载和构建源码开始，经过理解架构，最终进入修改、测试和贡献平台。
+
+7. **核心概念**，例如 Binder、HAL、AIDL、HIDL、APEX、Mainline、ART、Zygote、system_server、SurfaceFlinger、WMS、AMS、PMS，是 AOSP 开发的基本词汇。你会在后续每一章中遇到它们。
+
+下一章，我们会真正卷起袖子，搭建完整的 AOSP 开发环境：安装依赖、下载源码、配置构建，并在模拟器上运行第一次构建。

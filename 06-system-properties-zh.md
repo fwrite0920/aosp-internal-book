@@ -175,23 +175,167 @@ class prop_area {
 `prop_trie_node` 结构如下：
 
 ```c
+// Source: bionic/libc/system_properties/include/system_properties/prop_area.h
 struct prop_trie_node {
     uint32_t namelen;
-    atomic_uint_least32_t prop;
-    atomic_uint_least32_t left;
-    atomic_uint_least32_t right;
-    atomic_uint_least32_t children;
-    char name[0];
+
+    // 原子“指针”（实际上是相对于 data_ 基地址的偏移量）
+    // 使用 release-consume 顺序保证线程安全
+    atomic_uint_least32_t prop;       // -> 如果属性在此处存在，指向 prop_info
+    atomic_uint_least32_t left;       // -> 指向 BST 中的左子节点
+    atomic_uint_least32_t right;      // -> 指向 BST 中的右子节点
+    atomic_uint_least32_t children;   // -> 指向 trie 的下一层（第一个子节点）
+
+    char name[0];                     // 柔性数组：片段名称
+
+    prop_trie_node(const char* name, const uint32_t name_length) {
+        this->namelen = name_length;
+        memcpy(this->name, name, name_length);
+        this->name[name_length] = '\0';
+    }
 };
 ```
 
-对于 `ro.build.fingerprint` 这样的属性名，查找过程是：
+```mermaid
+graph TD
+    ROOT["Root Node<br/>(empty)"]
 
-1. 从 root 节点开始，进入 children。
-2. 在兄弟二叉树中查找 `ro` 片段。
-3. 进入 `ro` 的 children，查找 `build`。
-4. 进入 `build` 的 children，查找 `fingerprint`。
-5. 返回挂在 `fingerprint` 节点上的 `prop_info`。
+    RO["ro<br/>prop_trie_node"]
+    SYS["sys<br/>prop_trie_node"]
+    PERSIST["persist<br/>prop_trie_node"]
+    NET["net<br/>prop_trie_node"]
+    DEBUG["debug<br/>prop_trie_node"]
+
+    RO_BUILD["build<br/>prop_trie_node"]
+    RO_PRODUCT["product<br/>prop_trie_node"]
+    RO_HARDWARE["hardware<br/>prop_trie_node"]
+    RO_BOOT["boot<br/>prop_trie_node"]
+    RO_SECURE["secure<br/>prop_trie_node"]
+
+    RO_BUILD_FP["fingerprint<br/>prop_trie_node"]
+    RO_BUILD_TYPE["type<br/>prop_trie_node"]
+
+    PI_SECURE["prop_info<br/>ro.secure = 1"]
+    PI_FP["prop_info<br/>ro.build.fingerprint =<br/>google/raven/..."]
+    PI_TYPE["prop_info<br/>ro.build.type = userdebug"]
+
+    ROOT -->|children| RO
+    RO -->|right BST| SYS
+    SYS -->|right BST| PERSIST
+    RO -->|left BST| NET
+    NET -->|left BST| DEBUG
+
+    RO -->|children| RO_BUILD
+    RO_BUILD -->|right BST| RO_PRODUCT
+    RO_PRODUCT -->|right BST| RO_HARDWARE
+    RO_BUILD -->|left BST| RO_BOOT
+    RO_HARDWARE -->|right BST| RO_SECURE
+
+    RO_BUILD -->|children| RO_BUILD_FP
+    RO_BUILD_FP -->|right BST| RO_BUILD_TYPE
+
+    RO_SECURE -->|prop| PI_SECURE
+    RO_BUILD_FP -->|prop| PI_FP
+    RO_BUILD_TYPE -->|prop| PI_TYPE
+
+    style ROOT fill:#2d3436,color:#fff
+    style PI_SECURE fill:#00b894,color:#fff
+    style PI_FP fill:#00b894,color:#fff
+    style PI_TYPE fill:#00b894,color:#fff
+```
+
+`find_property` 方法通过遍历该前缀树（trie）来定位属性：
+
+```c
+// Source: bionic/libc/system_properties/prop_area.cpp
+const prop_info* prop_area::find_property(prop_trie_node* const trie,
+    const char* name, uint32_t namelen,
+    const char* value, uint32_t valuelen, bool alloc_if_needed) {
+    if (!trie) return nullptr;
+
+    const char* remaining_name = name;
+    prop_trie_node* current = trie;
+    while (true) {
+        const char* sep = strchr(remaining_name, '.');
+        const bool want_subtree = (sep != nullptr);
+        const uint32_t substr_size = (want_subtree)
+            ? sep - remaining_name : strlen(remaining_name);
+
+        if (!substr_size) return nullptr;
+
+        // 导航到子节点，如果需要则创建
+        prop_trie_node* root = nullptr;
+        uint_least32_t children_offset =
+            atomic_load_explicit(&current->children, memory_order_relaxed);
+        if (children_offset != 0) {
+            root = to_prop_trie_node(&current->children);
+        } else if (alloc_if_needed) {
+            uint_least32_t new_offset;
+            root = new_prop_trie_node(remaining_name, substr_size, &new_offset);
+            if (root) {
+                atomic_store_explicit(&current->children, new_offset,
+                                      memory_order_release);
+            }
+        }
+        if (!root) return nullptr;
+
+        // 在兄弟节点之间进行二分查找
+        current = find_prop_trie_node(root, remaining_name, substr_size,
+                                       alloc_if_needed);
+        if (!current) return nullptr;
+        if (!want_subtree) break;
+        remaining_name = sep + 1;
+    }
+
+    // 检查此节点是否附加了 prop_info
+    uint_least32_t prop_offset =
+        atomic_load_explicit(&current->prop, memory_order_relaxed);
+    if (prop_offset != 0) {
+        return to_prop_info(&current->prop);
+    } else if (alloc_if_needed) {
+        // 分配新的 prop_info
+        ...
+    }
+    return nullptr;
+}
+```
+
+对于像 `ro.build.fingerprint` 这样的属性名，查找过程如下：
+
+1. 从根节点开始，下降到子节点。
+2. 在子节点中二分查找 `ro` 片段。
+3. 下降到 `ro` 的子节点，二分查找 `build`。
+4. 下降到 `build` 的子节点，二分查找 `fingerprint`。
+5. 返回附加在 `fingerprint` 节点上的 `prop_info`。
+
+兄弟节点之间的二分查找实现在 `find_prop_trie_node` 中：
+
+```c
+// Source: bionic/libc/system_properties/prop_area.cpp
+prop_trie_node* prop_area::find_prop_trie_node(prop_trie_node* const trie,
+    const char* name, uint32_t namelen, bool alloc_if_needed) {
+    prop_trie_node* current = trie;
+    while (true) {
+        if (!current) return nullptr;
+        const int ret = cmp_prop_name(name, namelen, current->name,
+                                       current->namelen);
+        if (ret == 0) return current;        // 找到
+        if (ret < 0) {                       // 向左走
+            uint_least32_t left_offset =
+                atomic_load_explicit(&current->left, memory_order_relaxed);
+            if (left_offset != 0) {
+                current = to_prop_trie_node(&current->left);
+            } else {
+                if (!alloc_if_needed) return nullptr;
+                // 在左侧分配新节点
+                ...
+            }
+        } else {                             // 向右走
+            ...
+        }
+    }
+}
+```
 
 ### 6.1.5 `prop_info` 结构
 
@@ -234,32 +378,128 @@ struct prop_info {
 +----------------------------+
 ```
 
-### 6.1.6 Wait-Free 读取协议
+### 6.1.6 无等待（Wait-Free）读取协议
 
-系统属性实现了一套 wait-free 读取协议，即使写入正在进行，读取者也永远不会阻塞。协议依赖 `serial` 字段与 dirty backup area。
+系统属性机制实现了一套复杂的无等待（Wait-Free）读取协议，确保即使在写入正在进行时，读取者也永远不会阻塞。该协议依赖于 `serial` 字段和“脏数据备份区（dirty backup area）”。
 
-init 更新属性时会执行如下步骤：
+当 init 需要更新属性时，它在 `bionic/libc/system_properties/system_properties.cpp` 中遵循以下序列：
 
 ```c
+// Source: bionic/libc/system_properties/system_properties.cpp
 int SystemProperties::Update(prop_info* pi, const char* value, unsigned int len) {
+    ...
     uint32_t serial = atomic_load_explicit(&pi->serial, memory_order_relaxed);
     unsigned int old_len = SERIAL_VALUE_LEN(serial);
 
+    // 步骤 1：将旧值拷贝到脏数据备份区
     memcpy(pa->dirty_backup_area(), pi->value, old_len + 1);
+
+    // 步骤 2：设置脏位（bit 0 = 1）
     serial |= 1;
     atomic_store_explicit(&pi->serial, serial, memory_order_release);
+
+    // 步骤 3：在更新值之前设置内存屏障（Memory fence）
     atomic_thread_fence(memory_order_release);
+
+    // 步骤 4：将新值拷贝到 prop_info 中
     memcpy(pi->value, value, len + 1);
+
+    // 步骤 5：清除脏位，更新长度和计数器
     int new_serial = (len << 24) | ((serial + 1) & 0xffffff);
     atomic_store_explicit(&pi->serial, new_serial, memory_order_release);
+
+    // 步骤 6：通过 futex 唤醒等待者
     __futex_wake(&pi->serial, INT32_MAX);
-    ...
+
+    // 步骤 7：递增全局区域序列号
+    atomic_store_explicit(serial_pa->serial(),
+        atomic_load_explicit(serial_pa->serial(), memory_order_relaxed) + 1,
+        memory_order_release);
+    __futex_wake(serial_pa->serial(), INT32_MAX);
+    return 0;
 }
 ```
 
-读取端的 `ReadMutablePropertyValue()` 会检查 dirty bit。若发现写入者正处于中间状态，就从 dirty backup area 读取旧值；若读取过程中 serial 发生变化，则重新读取。这保证了读取者要么看到完整旧值，要么看到完整新值，永远不会看到被写到一半的值。
+在读取端，`ReadMutablePropertyValue` 处理脏位逻辑：
 
-只读属性（`ro.*`）有额外优化：它们设置后不会变化，因此读取者可以跳过 dirty-bit 协议，直接读取 value 或 long value。
+```c
+// Source: bionic/libc/system_properties/system_properties.cpp
+uint32_t SystemProperties::ReadMutablePropertyValue(const prop_info* pi, char* value) {
+    uint32_t new_serial = load_const_atomic(&pi->serial, memory_order_acquire);
+    uint32_t serial;
+    unsigned int len;
+    for (;;) {
+        serial = new_serial;
+        len = SERIAL_VALUE_LEN(serial);
+        if (__predict_false(SERIAL_DIRTY(serial))) {
+            // 写入者正在更新中：改为从备份区读取旧值
+            prop_area* pa = contexts_->GetPropAreaForName(pi->name);
+            memcpy(value, pa->dirty_backup_area(), len + 1);
+        } else {
+            memcpy(value, pi->value, len + 1);
+        }
+        atomic_thread_fence(memory_order_acquire);
+        new_serial = load_const_atomic(&pi->serial, memory_order_relaxed);
+        if (__predict_true(serial == new_serial)) {
+            break;  // 序列号未变：读取一致
+        }
+        // 读取期间序列号发生了变化：重试
+        atomic_thread_fence(memory_order_acquire);
+    }
+    return serial;
+}
+```
+
+```mermaid
+sequenceDiagram
+    participant Writer as init (写入者)
+    participant SHM as 共享内存
+    participant Reader as 进程 (读取者)
+
+    Note over SHM: serial=0x01000002<br/>value="old_val"
+
+    Writer->>SHM: 将旧值拷贝到脏数据备份区
+    Writer->>SHM: 设置序列号脏位 (serial |= 1)
+    Writer->>SHM: 将新值 memcpy 到 prop_info
+
+    Reader->>SHM: 加载序列号 (看到脏位已设置)
+    Reader->>SHM: 从脏数据备份区读取 ("old_val")
+    Reader->>SHM: 重新加载序列号
+    Note over Reader: 序列号已变 -> 重试
+
+    Writer->>SHM: 更新序列号：新长度 + 清除脏位
+    Writer->>SHM: futex_wake()
+
+    Reader->>SHM: 加载序列号 (脏位已清除)
+    Reader->>SHM: 从 prop_info 读取值 ("new_val")
+    Reader->>SHM: 重新加载序列号 (匹配 -> 成功)
+    Note over Reader: 读取完成: "new_val"
+```
+
+只读属性（`ro.*`）获得了一项优化：由于它们在设置后永远不会改变，读取者可以完全跳过脏位协议：
+
+```c
+// Source: bionic/libc/system_properties/system_properties.cpp
+void SystemProperties::ReadCallback(const prop_info* pi,
+    void (*callback)(void* cookie, const char* name,
+                     const char* value, uint32_t serial),
+    void* cookie) {
+    if (is_read_only(pi->name)) {
+        // 只读：无需脏位检查
+        uint32_t serial = load_const_atomic(&pi->serial, memory_order_relaxed);
+        if (pi->is_long()) {
+            callback(cookie, pi->name, pi->long_value(), serial);
+        } else {
+            callback(cookie, pi->name, pi->value, serial);
+        }
+        return;
+    }
+    // 可变属性：使用完整的读取协议
+    char value_buf[PROP_VALUE_MAX];
+    uint32_t serial = ReadMutablePropertyValue(pi, value_buf);
+    callback(cookie, pi->name, value_buf, serial);
+}
+```
 
 ### 6.1.7 长属性值
 
@@ -299,25 +539,107 @@ const char* long_value() const {
 init 启动时从多个 `property_contexts` 文件构建它：
 
 ```c
+// Source: system/core/init/property_service.cpp
 void CreateSerializedPropertyInfo() {
     auto property_infos = std::vector<PropertyInfoEntry>();
-    LoadPropertyInfoFromFile("/system/etc/selinux/plat_property_contexts", &property_infos);
-    LoadPropertyInfoFromFile("/system_ext/etc/selinux/system_ext_property_contexts", ...);
-    LoadPropertyInfoFromFile("/vendor/etc/selinux/vendor_property_contexts", ...);
-    LoadPropertyInfoFromFile("/product/etc/selinux/product_property_contexts", ...);
-    LoadPropertyInfoFromFile("/odm/etc/selinux/odm_property_contexts", ...);
 
+    // 加载平台属性上下文
+    if (access("/system/etc/selinux/plat_property_contexts", R_OK) != -1) {
+        LoadPropertyInfoFromFile(
+            "/system/etc/selinux/plat_property_contexts", &property_infos);
+
+        // 加载分区专属上下文
+        LoadPropertyInfoFromFile(
+            "/system_ext/etc/selinux/system_ext_property_contexts", ...);
+        LoadPropertyInfoFromFile(
+            "/vendor/etc/selinux/vendor_property_contexts", ...);
+        LoadPropertyInfoFromFile(
+            "/product/etc/selinux/product_property_contexts", ...);
+        LoadPropertyInfoFromFile(
+            "/odm/etc/selinux/odm_property_contexts", ...);
+    }
+    ...
+
+    // 序列化为紧凑的二进制格式
     auto serialized_contexts = std::string();
-    BuildTrie(property_infos, "u:object_r:default_prop:s0", "string",
-              &serialized_contexts, &error);
+    auto error = std::string();
+    if (!BuildTrie(property_infos, "u:object_r:default_prop:s0", "string",
+                   &serialized_contexts, &error)) {
+        LOG(ERROR) << "Unable to serialize property contexts: " << error;
+        return;
+    }
+
+    // 写入到 /dev/__properties__/property_info
     WriteStringToFile(serialized_contexts, PROP_TREE_FILE, 0444, 0, 0, false);
     selinux_android_restorecon(PROP_TREE_FILE, 0);
 }
 ```
 
-序列化格式由 `system/core/property_service/libpropertyinfoparser/include/property_info_parser/property_info_parser.h` 定义，包括 `PropertyInfoAreaHeader`、`TrieNodeInternal` 和 `PropertyEntry`。当进程调用 `__system_property_find("debug.myapp.trace")` 时，bionic 会先查 `property_info` trie 找到 `debug.*` 对应的 SELinux context，再打开 `/dev/__properties__/` 下对应的 property area 文件，最后在该区域内查找真实 value。
+序列化后的 `property_info` trie 定义在 `system/core/property_service/libpropertyinfoparser/include/property_info_parser/property_info_parser.h` 中：
 
-这套两级查找使每个 SELinux context 都映射到独立内存映射文件，从而让内核可以在文件级别执行读取权限控制。
+```c
+// Source: system/core/property_service/libpropertyinfoparser/.../property_info_parser.h
+struct PropertyInfoAreaHeader {
+    uint32_t current_version;
+    uint32_t minimum_supported_version;
+    uint32_t size;
+    uint32_t contexts_offset;     // -> 指向 SELinux context 字符串数组
+    uint32_t types_offset;        // -> 指向类型字符串数组
+    uint32_t root_offset;         // -> 根 TrieNodeInternal
+};
+
+struct TrieNodeInternal {
+    uint32_t property_entry;      // -> 此节点的 PropertyEntry
+    uint32_t num_child_nodes;
+    uint32_t child_nodes;         // -> 已排序的子节点偏移量数组
+    uint32_t num_prefixes;
+    uint32_t prefix_entries;      // -> 前缀匹配条目
+    uint32_t num_exact_matches;
+    uint32_t exact_match_entries; // -> 精确匹配条目
+};
+
+struct PropertyEntry {
+    uint32_t name_offset;
+    uint32_t namelen;
+    uint32_t context_index;       // contexts 数组中的索引
+    uint32_t type_index;          // types 数组中的索引
+};
+```
+
+```mermaid
+graph TB
+    subgraph "property_info 文件 (/dev/__properties__/property_info)"
+        HDR["PropertyInfoAreaHeader<br/>version, size<br/>contexts_offset<br/>types_offset<br/>root_offset"]
+
+        CTX_ARRAY["Contexts Array<br/>[0] u:object_r:default_prop:s0<br/>[1] u:object_r:system_prop:s0<br/>[2] u:object_r:radio_prop:s0<br/>[3] u:object_r:debug_prop:s0<br/>..."]
+
+        TYPE_ARRAY["Types Array<br/>[0] string<br/>[1] bool<br/>[2] int<br/>[3] uint<br/>..."]
+
+        ROOT["Root TrieNodeInternal<br/>children: [ro, sys, net, persist, debug, ...]"]
+
+        RO_NODE["'ro' TrieNodeInternal<br/>context_index: 1<br/>prefix_entries: [...]<br/>children: [build, product, ...]"]
+
+        DEBUG_NODE["'debug' TrieNodeInternal<br/>context_index: 3<br/>type_index: 0 (string)"]
+    end
+
+    HDR --> CTX_ARRAY
+    HDR --> TYPE_ARRAY
+    HDR --> ROOT
+    ROOT --> RO_NODE
+    ROOT --> DEBUG_NODE
+
+    style HDR fill:#0984e3,color:#fff
+    style CTX_ARRAY fill:#6c5ce7,color:#fff
+    style TYPE_ARRAY fill:#6c5ce7,color:#fff
+```
+
+当进程调用 `__system_property_find("debug.myapp.trace")` 时，bionic 库：
+
+1. 查找 `property_info` trie 以找到 `debug.*` 的 SELinux context 索引。
+2. 使用该索引打开 `/dev/__properties__/` 下正确的 property area 文件。
+3. 在该区域内的属性值 trie 中搜索实际值。
+
+这种两级查找机制确保了每个 SELinux context 映射到其自己的内存映射文件，从而使内核能够在文件级别强制执行读取权限。
 
 ---
 
@@ -374,6 +696,7 @@ static std::optional<uint32_t> PropertySet(const std::string& name,
 存储文件是 `/data/property/persistent_properties`，编码格式为 Protocol Buffer：
 
 ```c
+// Source: system/core/init/persistent_properties.cpp
 [[clang::no_destroy]] std::string persistent_property_filename =
     "/data/property/persistent_properties";
 ```
@@ -381,17 +704,95 @@ static std::optional<uint32_t> PropertySet(const std::string& name,
 当设置 `persist.*` 属性时，`PropertySet()` 会触发写入：
 
 ```c
+// Source: system/core/init/property_service.cpp
 bool need_persist = StartsWith(name, "persist.") || StartsWith(name, "next_boot.");
 if (socket && persistent_properties_loaded && need_persist) {
     if (persist_write_thread) {
         persist_write_thread->Write(name, value, std::move(*socket));
-        return {};
+        return {};  // 响应在写入完成后异步发送
     }
     WritePersistentProperty(name, value);
 }
 ```
 
-写入过程会读取整个 protobuf 文件，更新对应条目，然后用临时文件加 `rename()` 的原子替换模式写回。为了持久性，写入会对文件执行 `fsync()`，再对目录 fd 执行 `fsync()`。当 `ro.property_service.async_persist_writes` 为 `true` 时，init 会把持久化写入交给专用 `PersistWriteThread` 异步执行，写入完成后再通知属性变化并给 socket 返回 `PROP_SUCCESS`。
+写入操作会读取整个 protobuf 文件，更新相关条目，然后使用 rename 原子地写回：
+
+```c
+// Source: system/core/init/persistent_properties.cpp
+void WritePersistentProperty(const std::string& name, const std::string& value) {
+    auto persistent_properties = LoadPersistentPropertyFile();
+    if (!persistent_properties.ok()) {
+        // 如果文件损坏，从内存中恢复
+        persistent_properties = LoadPersistentPropertiesFromMemory();
+    }
+
+    // 查找并更新，或添加新条目
+    auto it = std::find_if(...);
+    if (it != persistent_properties->mutable_properties()->end()) {
+        it->set_value(value);
+    } else {
+        AddPersistentProperty(name, value, &persistent_properties.value());
+    }
+
+    WritePersistentPropertyFile(*persistent_properties);
+}
+```
+
+磁盘写入采用了标准的原子重命名模式：
+
+```c
+// Source: system/core/init/persistent_properties.cpp
+Result<void> WritePersistentPropertyFile(
+    const PersistentProperties& persistent_properties) {
+    const std::string temp_filename = persistent_property_filename + ".tmp";
+    unique_fd fd(TEMP_FAILURE_RETRY(
+        open(temp_filename.c_str(),
+             O_WRONLY | O_CREAT | O_NOFOLLOW | O_TRUNC | O_CLOEXEC, 0600)));
+    ...
+    std::string serialized_string;
+    persistent_properties.SerializeToString(&serialized_string);
+    WriteStringToFd(serialized_string, fd);
+    fsync(fd.get());
+    fd.reset();
+
+    // 原子重命名
+    rename(temp_filename.c_str(), persistent_property_filename.c_str());
+
+    // 对目录进行 fsync 以确保持久性
+    auto dir_fd = unique_fd{open(dir.c_str(), O_DIRECTORY | O_RDONLY | O_CLOEXEC)};
+    fsync(dir_fd.get());
+    return {};
+}
+```
+
+为了提高性能，系统提供了一个异步写入线程。当 `ro.property_service.async_persist_writes` 为 `true` 时，init 会将持久化写入委托给专用的 `PersistWriteThread`：
+
+```c
+// Source: system/core/init/property_service.cpp
+class PersistWriteThread {
+  public:
+    void Write(std::string name, std::string value, SocketConnection socket);
+  private:
+    void Work() {
+        while (true) {
+            std::tuple<std::string, std::string, SocketConnection> item;
+            {
+                std::unique_lock<std::mutex> lock(mutex_);
+                while (work_.empty()) { cv_.wait(lock); }
+                item = std::move(work_.front());
+                work_.pop_front();
+            }
+            WritePersistentProperty(std::get<0>(item), std::get<1>(item));
+            NotifyPropertyChange(std::get<0>(item), std::get<1>(item));
+            std::get<2>(item).SendUint32(PROP_SUCCESS);
+        }
+    }
+    std::thread thread_;
+    std::mutex mutex_;
+    std::condition_variable cv_;
+    std::deque<std::tuple<std::string, std::string, SocketConnection>> work_;
+};
+```
 
 ### 6.2.3 阶段化属性（`next_boot.*`）
 
@@ -551,7 +952,7 @@ static bool CheckMacPerms(const std::string& name, const char* target_context,
 
 ### 6.4.1 初始化序列
 
-property service 的启动分为两个阶段：先初始化共享内存和 property context，再启动 socket 线程接受写入请求。
+property service 的启动分为两个阶段：首先初始化共享内存和属性上下文，然后启动 socket 线程以接受写入请求。
 
 ```mermaid
 graph TD
@@ -559,7 +960,7 @@ graph TD
     B --> C["mkdir /dev/__properties__"]
     C --> D["CreateSerializedPropertyInfo()"]
     D --> E["__system_property_area_init()"]
-    E --> F["LoadDefaultPath property_info"]
+    E --> F["加载默认路径的 property_info"]
     F --> G["ProcessKernelCmdline()"]
     G --> H["ProcessBootconfig()"]
     H --> I["ExportKernelBootProps()"]
@@ -568,16 +969,17 @@ graph TD
 
     L["StartPropertyService()"] --> M["设置 ro.property_service.version=2"]
     M --> N["socketpair()"]
-    N --> O["启动 property_service_for_system"]
-    O --> P["启动 property_service"]
+    N --> O["启动 property_service_for_system 线程"]
+    O --> P["启动 property_service 线程"]
     P --> Q["启动 PersistWriteThread（可选）"]
 ```
 
 ### 6.4.2 加载启动属性
 
-`PropertyLoadBootDefaults()` 负责按正确顺序加载所有属性文件。顺序很重要，因为后加载、更具体分区中的属性会覆盖先加载、更通用分区中的属性。
+`PropertyLoadBootDefaults()` 负责按正确顺序加载所有属性文件。顺序非常重要，因为后加载的、来自更具体分区的属性会覆盖先加载的、更通用分区的属性。
 
 ```c
+// Source: system/core/init/property_service.cpp
 void PropertyLoadBootDefaults() {
     std::map<std::string, std::string> properties;
     LoadPropertiesFromSecondStageRes(&properties);
@@ -592,6 +994,7 @@ void PropertyLoadBootDefaults() {
     load_properties_from_partition("product", 30);
 
     for (const auto& [name, value] : properties) {
+        std::string error;
         PropertySetNoSocket(name, value, &error);
     }
 
@@ -603,22 +1006,23 @@ void PropertyLoadBootDefaults() {
 }
 ```
 
-优先级从低到高如下：
+属性加载的优先级从低到高依次为：
 
-1. `system/build.prop`
-2. `system_ext/etc/build.prop`
-3. `system_dlkm/etc/build.prop`
-4. `vendor/default.prop` 与 `vendor/build.prop`
-5. `vendor_dlkm/etc/build.prop`
-6. `odm_dlkm/etc/build.prop`
-7. `odm/etc/build.prop`
-8. `product/etc/build.prop`
+1. `/system/build.prop`
+2. `/system_ext/etc/build.prop`
+3. `/system_dlkm/etc/build.prop`
+4. `/vendor/default.prop` 与 `/vendor/build.prop`
+5. `/vendor_dlkm/etc/build.prop`
+6. `/odm_dlkm/etc/build.prop`
+7. `/odm/etc/build.prop`
+8. `/product/etc/build.prop`
 
-### 6.4.3 Kernel Command Line 处理
+### 6.4.3 内核命令行（Kernel Command Line）处理
 
-init 会把 kernel command line 和 bootconfig 中的 `androidboot.*` 参数转换为 `ro.boot.*` 属性：
+init 会将内核命令行和 bootconfig 中的 `androidboot.*` 参数转换为 `ro.boot.*` 属性：
 
 ```c
+// Source: system/core/init/property_service.cpp
 constexpr auto ANDROIDBOOT_PREFIX = "androidboot."sv;
 
 static void ProcessKernelCmdline() {
@@ -631,9 +1035,10 @@ static void ProcessKernelCmdline() {
 }
 ```
 
-随后 `ExportKernelBootProps()` 会创建遗留别名：
+随后 `ExportKernelBootProps()` 会创建一些遗留别名，以保证兼容性：
 
 ```c
+// Source: system/core/init/property_service.cpp
 static void ExportKernelBootProps() {
     struct { const char* src_prop; const char* dst_prop; const char* default_value; } prop_map[] = {
         { "ro.boot.serialno",   "ro.serialno",   ""        },
@@ -652,6 +1057,7 @@ static void ExportKernelBootProps() {
 property service 通过两个 Unix domain socket 接受写入请求：
 
 ```c
+// Source: system/core/init/property_service.cpp
 void StartPropertyService(int* epoll_socket) {
     InitPropertySet("ro.property_service.version", "2");
     socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets);
@@ -662,38 +1068,39 @@ void StartPropertyService(int* epoll_socket) {
 }
 ```
 
-两个 socket 的职责如下：
+这两个 socket 的职责分工如下：
 
-- **`property_service_for_system`**（mode 0660）：仅 system 组进程可访问，也监听 init 内部消息，例如加载持久化属性。
-- **`property_service`**（mode 0666）：所有进程可访问，是通用属性设置 socket。
+- **`property_service_for_system`**（权限 0660）：仅供 system 组的进程访问。它也监听来自 init 内部的消息，例如加载持久化属性的请求。
+- **`property_service`**（权限 0666）：对所有进程开放，是通用的属性设置接口。
 
-每个 socket 都运行在自己的 epoll 线程中，接收连接、读取消息、检查凭据，并调用属性设置逻辑。
+每个 socket 都在独立的 epoll 线程中运行，负责接收连接、解析消息、检查调用方凭据，并执行最终的属性设置逻辑。
 
-### 6.4.5 Wire Protocol
+### 6.4.5 传输协议（Wire Protocol）
 
-属性设置协议有两种消息类型：
+属性设置协议支持两种消息类型：
 
-**`PROP_MSG_SETPROP`（遗留）：**
+**`PROP_MSG_SETPROP`（遗留消息）：**
 
 ```text
 [uint32_t cmd=1] [char name[PROP_NAME_MAX]] [char value[PROP_VALUE_MAX]]
 ```
 
-它使用固定长度字段，没有响应，供旧版 bionic 使用。
+它使用固定长度字段，且没有响应信息，主要供旧版 bionic 使用。
 
-**`PROP_MSG_SETPROP2`（当前）：**
+**`PROP_MSG_SETPROP2`（当前消息）：**
 
 ```text
 [uint32_t cmd=2] [uint32_t name_len] [char name[]] [uint32_t value_len] [char value[]]
 ```
 
-它使用长度前缀字符串，并返回一个 uint32 响应码。property service 通过 `SO_PEERCRED` 获取调用方 `pid`、`uid`、`gid`，再基于 SELinux context 和属性 context 执行权限检查。
+它使用带长度前缀的字符串，并会返回一个 uint32 类型的响应码。property service 通过 `SO_PEERCRED` 获取调用方的 `pid`、`uid` 和 `gid`，随后基于调用方的 SELinux 上下文和属性上下文执行权限检查。
 
 ### 6.4.6 属性变化通知
 
-属性成功设置后，init 可以触发 `.rc` 文件中定义的 action。每次成功设置属性后都会调用 `NotifyPropertyChange()`：
+属性成功设置后，init 可以触发在 `.rc` 文件中定义的动作（action）。每次成功设置属性后，都会调用 `NotifyPropertyChange()`：
 
 ```c
+// Source: system/core/init/property_service.cpp
 void NotifyPropertyChange(const std::string& name, const std::string& value) {
     auto lock = std::lock_guard{accept_messages_lock};
     if (accept_messages) {
@@ -702,7 +1109,7 @@ void NotifyPropertyChange(const std::string& name, const std::string& value) {
 }
 ```
 
-这支持如下 `.rc` trigger：
+这支持了类似如下的 `.rc` 触发器：
 
 ```text
 on property:sys.boot_completed=1
@@ -714,9 +1121,10 @@ on property:ro.debuggable=1
 
 ### 6.4.7 加载持久化属性
 
-持久化属性会在 `/data` 挂载后加载。system socket 线程通过来自 init 主循环的 protobuf 消息处理该操作：
+持久化属性会在 `/data` 分区挂载后加载。system socket 线程通过接收来自 init 主循环的 protobuf 消息来处理该操作：
 
 ```c
+// Source: system/core/init/property_service.cpp
 static void HandleInitSocket() {
     auto message = ReadMessage(init_socket);
     auto init_message = InitMessage{};
@@ -737,7 +1145,7 @@ static void HandleInitSocket() {
 }
 ```
 
-旧格式曾经把持久化属性存成 `/data/property/` 下的单独文件。现代 Android 使用单一 protobuf 文件。迁移逻辑会在新文件读取失败时回退到旧目录格式，成功读取后写回新格式，并删除旧文件。
+旧格式曾将每个持久化属性存储为 `/data/property/` 下的单独文件。现代 Android 使用统一的单 protobuf 文件。如果新格式读取失败，迁移逻辑会尝试回退到旧目录格式，成功后写回新格式并清理旧文件。
 
 ---
 
@@ -917,30 +1325,81 @@ sysprop_library {
 
 构建系统会基于该模块生成 Java、C++ 和 Rust 访问库，并生成 API dump 文件进行兼容性检查。
 
-### 6.6.4 代码生成
+### 6.6.4 代码生成过程
 
-`sysprop_library` 的生成流程如下：
+当定义一个 `sysprop_library` 模块时，Soong 会通过 `syspropLibraryHook` 自动创建多个子模块：
+
+```go
+// Source: build/soong/sysprop/sysprop_library.go
+func syspropLibraryHook(ctx android.LoadHookContext, m *syspropLibrary) {
+    ...
+    // 1. C++ 实现库 (lib<name>)
+    ctx.CreateModule(cc.LibraryFactory, &ccProps)
+
+    // 2. Java 源码生成器
+    ctx.CreateModule(syspropJavaGenFactory, &syspropGenProperties{
+        Srcs:  m.properties.Srcs,
+        Scope: scope,
+        Name:  proptools.StringPtr(m.javaGenModuleName()),
+    })
+
+    // 3. Java 实现库
+    ctx.CreateModule(java.LibraryFactory, &javaLibraryProperties{
+        Name: proptools.StringPtr(m.BaseModuleName()),
+        Srcs: []string{":" + m.javaGenModuleName()},
+    })
+
+    // 4. 公开 Java Stub（如果是平台所有且安装在 system 分区）
+    if isOwnerPlatform && installedInSystem {
+        ctx.CreateModule(syspropJavaGenFactory, ...)   // public scope
+        ctx.CreateModule(java.LibraryFactory, ...)     // public stub
+    }
+
+    // 5. Rust 实现库
+    ctx.CreateModule(syspropRustGenFactory, &rustProps)
+    ...
+}
+```
 
 ```mermaid
 graph TB
-    SYSPROP[".sysprop 文件"] --> PARSER["sysprop_parser"]
-    PARSER --> CC["C++ generator"]
-    PARSER --> JAVA["Java generator"]
-    PARSER --> RUST["Rust generator"]
+    SYSPROP[".sysprop 文件<br/>BluetoothProperties.sysprop"]
 
-    CC --> CC_LIB["lib*.sysprop<br/>C++ library"]
-    JAVA --> JAVA_LIB["*.sysprop<br/>Java library"]
-    RUST --> RUST_LIB["lib*_rust<br/>Rust crate"]
+    subgraph "生成的模块"
+        CC_LIB["C++ 库<br/>libPlatformProperties<br/>(cc_library)"]
+        JAVA_GEN["Java 源码生成器<br/>PlatformProperties_java_gen<br/>(syspropJavaGenRule)"]
+        JAVA_LIB["Java 库<br/>PlatformProperties<br/>(java_library)"]
+        JAVA_PUB["Java 公开 Stub<br/>PlatformProperties_public<br/>(java_library)"]
+        RUST_LIB["Rust 库<br/>libplatformproperties_rust<br/>(rust_library)"]
+    end
 
-    SYSPROP --> DUMP["API dump"]
-    DUMP --> CHECK["API compatibility check"]
-    CHECK --> CURRENT["api/*-current.txt"]
-    CHECK --> LATEST["api/*-latest.txt"]
+    SYSPROP -->|"sysprop_cc"| CC_LIB
+    SYSPROP -->|"sysprop_java"| JAVA_GEN
+    JAVA_GEN -->|"srcjar"| JAVA_LIB
+    SYSPROP -->|"sysprop_java (public scope)"| JAVA_PUB
+    SYSPROP -->|"sysprop_rust"| RUST_LIB
+
+    subgraph "API 管理"
+        CURRENT["api/PlatformProperties-current.txt"]
+        LATEST["api/PlatformProperties-latest.txt"]
+        DUMP["API dump"]
+        CHECK["API 兼容性检查"]
+    end
+
+    SYSPROP --> DUMP
+    DUMP --> CHECK
+    CHECK --> CURRENT
+    CHECK --> LATEST
+
+    style SYSPROP fill:#00b894,color:#fff
+    style CC_LIB fill:#0984e3,color:#fff
+    style JAVA_LIB fill:#e17055,color:#fff
+    style RUST_LIB fill:#d63031,color:#fff
 ```
 
 ### 6.6.5 生成的 Java 代码
 
-对于如下属性：
+对于如下定义的属性：
 
 ```protobuf
 prop {
@@ -959,67 +1418,112 @@ prop {
 package android.sysprop;
 
 public final class BluetoothProperties {
+    // 枚举类型
     public enum snoop_default_mode_values {
-        EMPTY("empty"), DISABLED("disabled"), FILTERED("filtered"), FULL("full");
+        EMPTY("empty"),
+        DISABLED("disabled"),
+        FILTERED("filtered"),
+        FULL("full");
+        ...
     }
 
+    // Getter 方法
     public static Optional<snoop_default_mode_values> snoop_default_mode() {
         String value = SystemProperties.get("persist.bluetooth.btsnoopdefaultmode");
         return snoop_default_mode_values.tryParse(value);
     }
 
+    // Setter 方法 (因为 access 为 ReadWrite)
     public static void snoop_default_mode(snoop_default_mode_values value) {
-        SystemProperties.set("persist.bluetooth.btsnoopdefaultmode", value.getPropValue());
+        SystemProperties.set("persist.bluetooth.btsnoopdefaultmode",
+                              value.getPropValue());
     }
 }
 ```
 
 ### 6.6.6 生成的 C++ 代码
 
-对应 C++ API 通常生成 `std::optional` getter 与 `Result<void>` setter：
+对应的 C++ 代码会生成：
 
 ```cpp
 namespace android::sysprop {
 
+// 返回 std::optional 的 Getter
 std::optional<std::string> snoop_default_mode();
+
+// 返回 Result<void> 的 Setter
 android::base::Result<void> snoop_default_mode(const std::string& value);
 
 }  // namespace android::sysprop
 ```
 
-### 6.6.7 Scope 与 Access 控制
+### 6.6.7 生成代码中的 Scope 与 Access 控制
 
-`scope` 字段控制生成内容：
+`scope` 字段控制生成的内容：
 
-- **`Public`**：属性进入 internal 和 public 生成库，被视为稳定 API，必须通过兼容性检查。
-- **`Internal`**：属性只进入 internal 生成库，不属于稳定 API surface。
+- **`Public`**：属性同时出现在 internal 和 public 生成库中。它被视为稳定 API，必须通过兼容性检查。
+- **`Internal`**：属性仅出现在 internal 库中，不属于稳定 API 表面。
 
 `access` 字段控制生成的方法：
 
-- **`Readonly`**：只生成 getter。通常用于构建期或启动期设置的属性。
-- **`Writeonce`**：生成 getter 和 setter，但 setter 被文档化为一次性使用，常见于 `ro.*`。
+- **`Readonly`**：仅生成 getter。此类属性通常不以 `persist.` 开头，且在构建期或启动时设置。
+- **`Writeonce`**：同时生成 getter 和 setter，但 setter 文档说明其为一次性使用（用于 `ro.*` 属性）。
 - **`ReadWrite`**：同时生成 getter 和 setter。
 
 ### 6.6.8 API 兼容性检查
 
-`sysprop_library` 通过两类文件强制 API 稳定：
+`sysprop_library` 模块通过双文件检查机制强制执行 API 稳定性：
 
 ```go
-// 1. 从 .sysprop dump 当前 API
-rule.Command().BuiltTool("sysprop_api_dump").Output(m.dumpedApiFile).Inputs(srcs)
+// Source: build/soong/sysprop/sysprop_library.go
+// 1. 从 .sysprop 文件 dump 当前 API
+rule.Command().
+    BuiltTool("sysprop_api_dump").
+    Output(m.dumpedApiFile).
+    Inputs(srcs)
 
-// 2. 比较 dump 与 checked-in current.txt
-rule.Command().Text("( cmp").Flag("-s").Input(m.dumpedApiFile).Text(currentApiArgument)
+// 2. 将 dump 结果与签入的 current.txt 进行比较（必须一致）
+rule.Command().
+    Text("( cmp").Flag("-s").
+    Input(m.dumpedApiFile).
+    Text(currentApiArgument).
+    Text("|| ( echo ...error... ; exit 38) )")
 
-// 3. 比较 current.txt 与 latest.txt，要求向后兼容
-rule.Command().BuiltTool("sysprop_api_checker").Text(latestApiArgument).Text(currentApiArgument)
+// 3. 将 current.txt 与 latest.txt 进行比较（必须兼容）
+rule.Command().
+    BuiltTool("sysprop_api_checker").
+    Text(latestApiArgument).
+    Text(currentApiArgument)
 ```
 
-这确保 `.sysprop` 与 `api/<name>-current.txt` 一致，并且当前 API 与 `api/<name>-latest.txt` 向后兼容。若有有意 API 变更，需要运行 dump 命令并更新对应 `current.txt`。
+这确保了：
+
+1. `.sysprop` 文件与签入的 `api/<name>-current.txt` 匹配。
+2. 当前 API 与 `api/<name>-latest.txt` 保持向后兼容。
+
+在进行有意的 API 更改后更新 API：
+
+```bash
+m PlatformProperties-dump-api && \
+    cp out/.../api-dump.txt <module>/api/PlatformProperties-current.txt
+```
 
 ### 6.6.9 与 `property_contexts` 集成
 
-`sysprop_library` 会自动与属性类型检查系统集成。构建期会收集所有 sysprop library 列表，供 `property_contexts` 规则验证其中声明的类型约束是否与 `.sysprop` 文件一致。
+`sysprop_library` 模块会自动与属性类型检查系统集成。所有 sysprop 库的列表在构建时被收集：
+
+```go
+// Source: build/soong/sysprop/sysprop_library.go
+if m.ExportedToMake() {
+    syspropLibrariesLock.Lock()
+    defer syspropLibrariesLock.Unlock()
+
+    libraries := syspropLibraries(ctx.Config())
+    *libraries = append(*libraries, "//"+ctx.ModuleDir()+":"+ctx.ModuleName())
+}
+```
+
+该列表由 `property_contexts` 构建规则使用，以确保 `property_contexts` 中的类型约束与 `.sysprop` 文件中声明的约束一致。
 
 ---
 
@@ -1055,63 +1559,97 @@ if (SelinuxGetVendorAndroidVersion() >= __ANDROID_API_P__) {
 
 这意味着从 vendor 分区文件加载的属性会以 vendor SELinux context 设置，其访问规则不同于 platform/init context。
 
-### 6.7.3 Vendor API Level
+### 6.7.3 Vendor API 级别
 
-`ro.vendor.api_level` 由 init 自动计算，用来表示 vendor 分区必须支持的最低 API level：
+`ro.vendor.api_level` 属性由 init 自动计算，反映了 vendor 分区必须支持的最低 API 级别：
 
 ```c
+// Source: system/core/init/property_service.cpp
 static void property_initialize_ro_vendor_api_level() {
     constexpr auto VENDOR_API_LEVEL_PROP = "ro.vendor.api_level";
-    if (__system_property_find(VENDOR_API_LEVEL_PROP) != nullptr) return;
 
-    auto vendor_api_level = GetIntProperty("ro.board.first_api_level", __ANDROID_VENDOR_API_MAX__);
-    vendor_api_level = GetIntProperty("ro.board.api_level", vendor_api_level);
-    auto product_first_api_level = GetIntProperty("ro.product.first_api_level", __ANDROID_API_FUTURE__);
+    if (__system_property_find(VENDOR_API_LEVEL_PROP) != nullptr) {
+        return;  // 已显式设置
+    }
+
+    auto vendor_api_level = GetIntProperty("ro.board.first_api_level",
+                                            __ANDROID_VENDOR_API_MAX__);
+    if (vendor_api_level != __ANDROID_VENDOR_API_MAX__) {
+        vendor_api_level = GetIntProperty("ro.board.api_level", vendor_api_level);
+    }
+
+    auto product_first_api_level =
+        GetIntProperty("ro.product.first_api_level", __ANDROID_API_FUTURE__);
+    if (product_first_api_level == __ANDROID_API_FUTURE__) {
+        product_first_api_level =
+            GetIntProperty("ro.build.version.sdk", __ANDROID_API_FUTURE__);
+    }
+
     vendor_api_level = std::min(
-        AVendorSupport_getVendorApiLevelOf(product_first_api_level), vendor_api_level);
-    PropertySetNoSocket(VENDOR_API_LEVEL_PROP, std::to_string(vendor_api_level), &error);
+        AVendorSupport_getVendorApiLevelOf(product_first_api_level),
+        vendor_api_level);
+
+    std::string error;
+    PropertySetNoSocket(VENDOR_API_LEVEL_PROP,
+                         std::to_string(vendor_api_level), &error);
 }
 ```
 
 ### 6.7.4 跨分区属性访问规则
 
-`sysprop_library` 构建系统会基于所有权和安装分区执行访问规则：
+`sysprop_library` 构建系统根据所有权和安装分区强制执行访问规则：
 
 ```mermaid
 graph LR
-    PO_PLATFORM["Platform-owned"] -->|"Public scope"| CP_SYSTEM["system / system_ext"]
-    PO_PLATFORM -->|"Public scope"| CP_VENDOR["vendor / odm"]
-    PO_PLATFORM -->|"Public scope"| CP_PRODUCT["product"]
+    subgraph "属性所有者"
+        PO_PLATFORM["Platform (平台)"]
+        PO_VENDOR["Vendor (厂商)"]
+        PO_ODM["Odm (原始设计制造商)"]
+    end
 
-    PO_VENDOR["Vendor-owned"] -->|"Internal scope"| CP_VENDOR
-    PO_VENDOR -.->|"DENIED"| CP_SYSTEM
+    subgraph "消费者分区"
+        CP_SYSTEM["system / system_ext"]
+        CP_VENDOR["vendor / odm"]
+        CP_PRODUCT["product"]
+    end
+
+    PO_PLATFORM -->|"Public scope"| CP_SYSTEM
+    PO_PLATFORM -->|"Public scope"| CP_VENDOR
+    PO_PLATFORM -->|"Public scope"| CP_PRODUCT
+
+    PO_VENDOR -->|"Internal scope"| CP_VENDOR
+    PO_VENDOR -.->|"拒绝访问"| CP_SYSTEM
     PO_VENDOR -->|"Public scope"| CP_PRODUCT
 
-    PO_ODM["ODM-owned"] -->|"Internal scope"| CP_VENDOR
-    PO_ODM -.->|"DENIED"| CP_SYSTEM
-    PO_ODM -.->|"DENIED"| CP_PRODUCT
+    PO_ODM -->|"Internal scope"| CP_VENDOR
+    PO_ODM -.->|"拒绝访问"| CP_SYSTEM
+    PO_ODM -.->|"拒绝访问"| CP_PRODUCT
+
+    style PO_PLATFORM fill:#00b894,color:#fff
+    style PO_VENDOR fill:#e17055,color:#fff
+    style PO_ODM fill:#d63031,color:#fff
 ```
 
 核心规则如下：
 
-- **Platform-owned** 属性可通过 `Public` scope 被所有分区读取。
-- **Vendor-owned** 属性不可从 system 分区访问。
-- **ODM-owned** 属性只能从 vendor/ODM 分区访问。
-- **Product** 分区始终使用 `Public` scope，因为它不能拥有属性。
+- **平台所有（Platform-owned）** 的属性可以被所有分区使用 `Public` 作用域读取。
+- **厂商所有（Vendor-owned）** 的属性无法从系统（system）分区访问。
+- **ODM 所有（ODM-owned）** 的属性只能从 vendor/ODM 分区访问。
+- **产品（Product）** 分区始终使用 `Public` 作用域，因为它不能拥有属性。
 
 ### 6.7.5 ODM 与 Vendor DLKM 分区
 
-ODM（Original Design Manufacturer）和 DLKM（Dynamic Loadable Kernel Modules）分区也有自己的 `build.prop` 文件。property service 的加载顺序确保 ODM 属性可以覆盖 vendor 属性：
+ODM（Original Design Manufacturer）和 DLKM（Dynamic Loadable Kernel Modules）分区拥有由属性服务加载的专属 `build.prop` 文件。加载顺序确保了 ODM 属性可以覆盖厂商属性：
 
 ```text
-vendor/default.prop       -> 先加载
+vendor/default.prop       -> 首先加载
 vendor/build.prop         -> 覆盖 vendor/default.prop
 vendor_dlkm/etc/build.prop
 odm_dlkm/etc/build.prop
 odm/etc/build.prop        -> 覆盖所有 vendor 属性
 ```
 
-这个层级允许 ODM 在不修改 vendor 分区的情况下定制 vendor 属性。
+这种层级结构允许 ODM 在不修改 vendor 分区的情况下定制厂商属性。
 
 ---
 
@@ -1119,33 +1657,44 @@ odm/etc/build.prop        -> 覆盖所有 vendor 属性
 
 ### 6.8.1 构建属性（`ro.build.*`）
 
-构建属性由构建系统在构建期设置，并写入各分区的 `build.prop` 文件。它们描述构建配置：
+构建属性由构建系统在构建期设置，并嵌入在 `build.prop` 文件中。它们描述了构建配置：
 
 | 属性 | 说明 | 示例 |
 |----------|-------------|---------|
-| `ro.build.display.id` | 构建显示字符串 | `UP1A.231005.007` |
+| `ro.build.display.id` | 构建的显示字符串 | `UP1A.231005.007` |
 | `ro.build.version.incremental` | 增量构建号 | `10817346` |
-| `ro.build.version.sdk` | SDK API level | `34` |
+| `ro.build.version.sdk` | SDK API 级别 | `34` |
 | `ro.build.version.release` | 用户可见版本 | `14` |
 | `ro.build.version.security_patch` | 安全补丁日期 | `2023-10-05` |
 | `ro.build.type` | 构建类型 | `user` / `userdebug` / `eng` |
 | `ro.build.tags` | 构建标签 | `release-keys` / `dev-keys` |
-| `ro.build.fingerprint` | 组合 fingerprint | 派生值 |
-| `ro.build.id` | Build ID | `UP1A.231005.007` |
+| `ro.build.fingerprint` | 复合指纹（Fingerprint） | （自动派生） |
+| `ro.build.id` | 构建 ID | `UP1A.231005.007` |
 
-### 6.8.2 Build Fingerprint 派生
+### 6.8.2 Build Fingerprint 派生过程
 
-如果 `ro.build.fingerprint` 没有显式设置，init 会自动派生：
+如果未显式设置 `ro.build.fingerprint`，init 会自动对其进行派生：
 
 ```c
+// Source: system/core/init/property_service.cpp
 static void property_derive_build_fingerprint() {
     std::string build_fingerprint = GetProperty("ro.build.fingerprint", "");
-    if (!build_fingerprint.empty()) return;
+    if (!build_fingerprint.empty()) {
+        return;  // 已显式设置
+    }
 
     const std::string UNKNOWN = "unknown";
     build_fingerprint = GetProperty("ro.product.brand", UNKNOWN);
     build_fingerprint += '/';
     build_fingerprint += GetProperty("ro.product.name", UNKNOWN);
+
+    // 支持 16KB 页大小设备选项
+    bool has16KbDevOption =
+        android::base::GetBoolProperty("ro.product.build.16k_page.enabled", false);
+    if (has16KbDevOption && getpagesize() == 16384) {
+        build_fingerprint += "_16kb";
+    }
+
     build_fingerprint += '/';
     build_fingerprint += GetProperty("ro.product.device", UNKNOWN);
     build_fingerprint += ':';
@@ -1158,152 +1707,395 @@ static void property_derive_build_fingerprint() {
     build_fingerprint += GetProperty("ro.build.type", UNKNOWN);
     build_fingerprint += '/';
     build_fingerprint += GetProperty("ro.build.tags", UNKNOWN);
+
     PropertySetNoSocket("ro.build.fingerprint", build_fingerprint, &error);
 }
 ```
 
-最终 fingerprint 形如：`google/raven/raven:14/UP1A.231005.007/10817346:userdebug/dev-keys`。
+生成的指纹示例如下：
+`google/raven/raven:14/UP1A.231005.007/10817346:userdebug/dev-keys`
 
-### 6.8.3 Product 属性（`ro.product.*`）
+### 6.8.3 产品属性（`ro.product.*`）
 
-`ro.product.*` 属性描述产品身份，例如品牌、设备名、型号和制造商。Android 支持按分区提供 product 属性，例如 `ro.product.system.*`、`ro.product.vendor.*`、`ro.product.product.*`。init 会根据 `ro.product.property_source_order` 指定的优先级派生最终的 `ro.product.*` 值。
+产品属性描述了设备的身份。它们遵循一套基于分区的派生系统，每个分区都可以定义自己的值，并由一套优先级顺序决定最终胜出的值：
 
-常见属性包括：
+```c
+// Source: system/core/init/property_service.cpp
+static void property_initialize_ro_product_props() {
+    const char* RO_PRODUCT_PROPS[] = {
+        "brand", "device", "manufacturer", "model", "name",
+    };
+    const char* RO_PRODUCT_PROPS_DEFAULT_SOURCE_ORDER =
+        "product,odm,vendor,system_ext,system";
 
-| 属性 | 说明 |
-|------|------|
-| `ro.product.brand` | 品牌 |
-| `ro.product.name` | 产品名 |
-| `ro.product.device` | 设备代号 |
-| `ro.product.model` | 用户可见型号 |
-| `ro.product.manufacturer` | 制造商 |
+    std::string ro_product_props_source_order =
+        GetProperty("ro.product.property_source_order", "");
+    if (ro_product_props_source_order.empty()) {
+        ro_product_props_source_order = RO_PRODUCT_PROPS_DEFAULT_SOURCE_ORDER;
+    }
+
+    for (const auto& ro_product_prop : RO_PRODUCT_PROPS) {
+        std::string base_prop = "ro.product." + std::string(ro_product_prop);
+        if (!GetProperty(base_prop, "").empty()) continue;
+
+        for (const auto& source : Split(ro_product_props_source_order, ",")) {
+            std::string target_prop = "ro.product." + source + "." + ro_product_prop;
+            std::string target_prop_val = GetProperty(target_prop, "");
+            if (!target_prop_val.empty()) {
+                PropertySetNoSocket(base_prop, target_prop_val, &error);
+                break;
+            }
+        }
+    }
+}
+```
+
+`ro.product.model` 的派生链如下：
+
+```mermaid
+graph LR
+    A["ro.product.product.model<br/>(product 分区)"] -->|"最高优先级"| RESULT["ro.product.model"]
+    B["ro.product.odm.model<br/>(odm 分区)"] -->|"如果 product 为空"| RESULT
+    C["ro.product.vendor.model<br/>(vendor 分区)"] -->|"如果 odm 为空"| RESULT
+    D["ro.product.system_ext.model<br/>(system_ext 分区)"] -->|"如果 vendor 为空"| RESULT
+    E["ro.product.system.model<br/>(system 分区)"] -->|"最低优先级"| RESULT
+
+    style RESULT fill:#00b894,color:#fff
+```
 
 ### 6.8.4 硬件属性（`ro.hardware.*`）
 
-硬件属性通常来自 bootloader 传入的 `androidboot.*` 参数，并映射为 `ro.boot.*` 后再派生到 legacy 属性。例如 `androidboot.hardware` 会变成 `ro.boot.hardware`，再导出为 `ro.hardware`。HAL、init rc 与设备专属脚本常用这些属性选择硬件路径。
+硬件属性描述了物理硬件平台：
 
-### 6.8.5 Boot Mode 属性（`ro.boot.*`）
+| 属性 | 来源 | 说明 |
+|----------|--------|-------------|
+| `ro.hardware` | 内核命令行 / DT | 硬件平台名称 |
+| `ro.boot.hardware` | 内核命令行 | 启动硬件标识符 |
+| `ro.hardware.chipname` | Vendor build.prop | SoC 芯片名称 |
+| `ro.boot.hardware.cpu.pagesize` | 启动时派生 | CPU 页大小 |
 
-`ro.boot.*` 属性来自 kernel command line 或 bootconfig，用于承载 bootloader 提供的信息，例如 serial number、boot mode、baseband、bootloader version、hardware name 和 hardware revision。
+硬件属性通常从内核命令行设置，然后进行传播：
 
-```text
-androidboot.serialno=ABC123       -> ro.boot.serialno=ABC123
-androidboot.hardware=raven        -> ro.boot.hardware=raven
-androidboot.mode=normal           -> ro.boot.mode=normal
+```c
+// 来自 ExportKernelBootProps():
+{ "ro.boot.hardware", "ro.hardware", "unknown" }
 ```
 
-### 6.8.6 CPU ABI List 属性
+CPU 页大小属性是自动派生的：
 
-init 会基于系统支持的 ABI 派生 CPU ABI list 属性：
+```c
+// Source: system/core/init/property_service.cpp
+void PropertyLoadDerivedDefaults() {
+    const char* PAGE_PROP = "ro.boot.hardware.cpu.pagesize";
+    if (GetProperty(PAGE_PROP, "").empty()) {
+        PropertySetNoSocket(PAGE_PROP, std::to_string(getpagesize()), &error);
+    }
+}
+```
+
+### 6.8.5 启动模式属性（`ro.boot.*`）
+
+这些属性来自内核命令行（`androidboot.*`）和 bootconfig：
 
 | 属性 | 说明 |
-|------|------|
-| `ro.product.cpu.abilist` | 所有支持 ABI |
-| `ro.product.cpu.abilist32` | 32 位 ABI 列表 |
-| `ro.product.cpu.abilist64` | 64 位 ABI 列表 |
+|----------|-------------|
+| `ro.boot.serialno` | 设备序列号 |
+| `ro.boot.mode` | 启动模式 (normal, charger, recovery) |
+| `ro.boot.baseband` | 基带版本 |
+| `ro.boot.bootloader` | Bootloader 版本 |
+| `ro.boot.hardware` | 硬件标识符 |
+| `ro.boot.revision` | 硬件修订版本 |
+| `ro.boot.slot_suffix` | A/B 槽位后缀 (_a 或 _b) |
+| `ro.boot.verifiedbootstate` | 验证启动状态 (green/yellow/orange) |
 
-这些属性会被 package manager、zygote 和应用兼容性逻辑使用，用来选择 native library ABI。
+内核命令行到属性的映射：
+
+```text
+内核命令行:  androidboot.serialno=ABC123
+    -> 属性:  ro.boot.serialno=ABC123
+
+Bootconfig:      androidboot.hardware=tensor
+    -> 属性:  ro.boot.hardware=tensor
+```
+
+### 6.8.6 CPU ABI 列表属性
+
+CPU ABI 列表属性决定了设备支持哪些指令集架构：
+
+```c
+// Source: system/core/init/property_service.cpp
+static void property_initialize_ro_cpu_abilist() {
+    const char* kAbilistSources[] = {
+        "product", "odm", "vendor", "system",
+    };
+
+    // 查找第一个定义了这些属性的来源
+    for (const auto& source : kAbilistSources) {
+        const auto abilist32_prop = "ro." + source + ".product.cpu.abilist32";
+        const auto abilist64_prop = "ro." + source + ".product.cpu.abilist64";
+        abilist32_prop_val = GetProperty(abilist32_prop, "");
+        abilist64_prop_val = GetProperty(abilist64_prop, "");
+        if (abilist32_prop_val != "" || abilist64_prop_val != "") {
+            break;
+        }
+    }
+
+    // 合并：64 位优先，然后是 32 位
+    auto abilist_prop_val = abilist64_prop_val;
+    if (abilist32_prop_val != "") {
+        if (abilist_prop_val != "") abilist_prop_val += ",";
+        abilist_prop_val += abilist32_prop_val;
+    }
+
+    PropertySetNoSocket("ro.product.cpu.abilist", abilist_prop_val, &error);
+    PropertySetNoSocket("ro.product.cpu.abilist32", abilist32_prop_val, &error);
+    PropertySetNoSocket("ro.product.cpu.abilist64", abilist64_prop_val, &error);
+}
+```
+
+典型值：
+
+- `ro.product.cpu.abilist` = `arm64-v8a,armeabi-v7a,armeabi`
+- `ro.product.cpu.abilist64` = `arm64-v8a`
+- `ro.product.cpu.abilist32` = `armeabi-v7a,armeabi`
 
 ### 6.8.7 完整启动属性加载时间线
 
 ```mermaid
 sequenceDiagram
-    participant BL as Bootloader
-    participant K as Kernel
-    participant I as init
+    participant KER as 内核
+    participant IN1 as init (第一阶段)
+    participant IN2 as init (第二阶段)
     participant PS as PropertyService
-    participant D as /data
+    participant DATA as /data 分区
 
-    BL->>K: 传入 androidboot.* 参数
-    K->>I: 启动 init
-    I->>PS: PropertyInit()
-    PS->>PS: 创建 /dev/__properties__
-    PS->>PS: 加载 property_contexts
-    PS->>PS: 处理 kernel cmdline / bootconfig
-    PS->>PS: 导出 ro.boot.* legacy aliases
-    PS->>PS: 加载 build.prop 文件
-    PS->>PS: 派生 ro.product.* / fingerprint / ABI
-    I->>PS: StartPropertyService()
-    I->>D: 挂载 /data
-    I->>PS: LoadPersistentProperties
-    PS->>PS: 加载 persist.* 与 next_boot.*
-    PS->>PS: 设置 ro.persistent_properties.ready=true
+    Note over KER: 启动开始
+    KER->>IN1: exec /init (PID 1)
+    IN1->>IN2: exec 第二阶段 init
+
+    Note over IN2: PropertyInit()
+    IN2->>IN2: mkdir /dev/__properties__
+    IN2->>IN2: CreateSerializedPropertyInfo()
+    IN2->>IN2: __system_property_area_init()
+
+    Note over IN2: 加载内核属性
+    IN2->>IN2: ProcessKernelDt() -> ro.boot.*
+    IN2->>IN2: ProcessBootconfig() -> ro.boot.*
+    IN2->>IN2: ProcessKernelCmdline() -> ro.boot.*
+    IN2->>IN2: ExportKernelBootProps() -> ro.serialno, ro.hardware, ...
+
+    Note over IN2: 加载分区属性
+    IN2->>IN2: /system/build.prop
+    IN2->>IN2: /system_ext/etc/build.prop
+    IN2->>IN2: /vendor/build.prop
+    IN2->>IN2: /odm/etc/build.prop
+    IN2->>IN2: /product/etc/build.prop
+
+    Note over IN2: 派生计算属性
+    IN2->>IN2: property_initialize_ro_product_props()
+    IN2->>IN2: property_derive_build_fingerprint()
+    IN2->>IN2: property_initialize_ro_cpu_abilist()
+    IN2->>IN2: property_initialize_ro_vendor_api_level()
+
+    Note over PS: StartPropertyService()
+    IN2->>PS: 创建 property_service socket
+    PS->>PS: 启动 epoll 线程
+
+    Note over DATA: /data 已挂载
+    IN2->>PS: kLoadPersistentProperties
+    PS->>DATA: LoadPersistentProperties()
+    DATA-->>PS: persist.* 属性
+    PS->>PS: InitPropertySet("ro.persistent_properties.ready", "true")
+
+    Note over PS: 系统完全启动
+    PS->>PS: sys.boot_completed = 1
 ```
 
 ---
 
 ## 6.9 动手实践：探索系统属性
 
+本节提供了用于理解系统属性机制的手操练习。所有练习均假设你拥有一台通过 `adb` 连接、运行 `userdebug` 或 `eng` 构建版本的设备或模拟器。
+
 ### 6.9.1 练习：列出并检查属性
 
+**列出所有属性：**
+
 ```bash
-# 列出所有属性
-adb shell getprop
-
-# 查看构建 fingerprint
-adb shell getprop ro.build.fingerprint
-
-# 查看属性数量
+# 列出所有属性（在真实设备上通常有 800-1200 个）
 adb shell getprop | wc -l
 
-# 按命名空间过滤
-adb shell getprop | grep '^\[ro\.'
-adb shell getprop | grep '^\[persist\.'
-adb shell getprop | grep '^\[vendor\.'
+# 列出所有只读属性
+adb shell getprop | grep "^\[ro\."
+
+# 列出所有持久化属性
+adb shell getprop | grep "^\[persist\."
+```
+
+**读取特定属性：**
+
+```bash
+# 构建指纹
+adb shell getprop ro.build.fingerprint
+
+# 设备型号
+adb shell getprop ro.product.model
+
+# API 级别
+adb shell getprop ro.build.version.sdk
+
+# 启动模式
+adb shell getprop ro.bootmode
+
+# 检查设备是否可调试
+adb shell getprop ro.debuggable
+```
+
+**检查属性区域文件：**
+
+```bash
+# 列出属性区域文件
+adb shell ls -la /dev/__properties__/
+
+# 检查 property_info 文件大小
+adb shell ls -la /dev/__properties__/property_info
+
+# 统计属性区域文件的数量（每个 SELinux 上下文一个）
+adb shell ls /dev/__properties__/ | wc -l
 ```
 
 ### 6.9.2 练习：设置并观察属性
 
-```bash
-# 设置 debug 属性
-adb shell setprop debug.myapp.trace 1
-adb shell getprop debug.myapp.trace
+**设置调试属性：**
 
-# 尝试修改只读属性会失败
-adb shell setprop ro.build.type eng
+```bash
+# 设置调试属性（在 userdebug 构建上允许 shell 用户操作）
+adb shell setprop debug.mytest.value "hello world"
+
+# 验证是否已设置
+adb shell getprop debug.mytest.value
+# 输出: hello world
+
+# 尝试设置持久化属性
+adb shell setprop persist.mytest.value "survives reboot"
+adb shell getprop persist.mytest.value
+
+# 重启并验证持久性
+adb reboot
+# 重启后：
+adb shell getprop persist.mytest.value
+# 输出: survives reboot
 ```
 
-`ro.*` 属性首次设置后不可修改，普通进程还会受到 SELinux 权限限制。
+**观察只读约束：**
+
+```bash
+# 尝试更改只读属性（将会失败）
+adb shell setprop ro.build.type "eng"
+# 此时会静默失败或产生错误
+
+# 验证其未发生变化
+adb shell getprop ro.build.type
+```
 
 ### 6.9.3 练习：观察属性变化
 
-```bash
-# 观察 property trigger 可使用 logcat
-adb logcat | grep -i property
+**使用 waitforprop 等待属性：**
 
-# 在另一个终端设置属性
-adb shell setprop debug.myapp.trace 2
+```bash
+# 在一个终端中，等待属性发生变化
+adb shell "
+    echo 'Waiting for debug.mytest.signal...'
+    while [ \"\$(getprop debug.mytest.signal)\" != 'go' ]; do
+        sleep 0.1
+    done
+    echo 'Signal received!'
+"
+
+# 在另一个终端中，触发该变化
+adb shell setprop debug.mytest.signal go
 ```
 
-### 6.9.4 练习：检查 Property Contexts
+**使用 watchprops 监控所有属性变化：**
 
 ```bash
-# 查看平台 property contexts
-adb shell cat /system/etc/selinux/plat_property_contexts | head
+# 开始监控（此工具会阻塞并打印实时发生的更改）
+adb shell watchprops
+# 随后在另一个终端中设置任何属性，即可看到报告
+```
 
-# 查看 vendor property contexts
-adb shell cat /vendor/etc/selinux/vendor_property_contexts | head
+### 6.9.4 练习：检查属性上下文（Property Contexts）
 
-# 搜索 debug 属性 context
-adb shell grep '^debug\.' /system/etc/selinux/plat_property_contexts
+**查看 property_contexts 文件：**
+
+```bash
+# 平台属性上下文
+adb shell cat /system/etc/selinux/plat_property_contexts | head -30
+
+# 厂商属性上下文
+adb shell cat /vendor/etc/selinux/vendor_property_contexts | head -20
+
+# 检查特定属性拥有的上下文
+adb shell getprop -Z debug.test.value
+```
+
+**测试 SELinux 强制执行：**
+
+```bash
+# 检查你的 shell 所处的 SELinux 上下文
+adb shell id -Z
+
+# 尝试设置一个你没有权限访问的属性
+adb shell setprop ro.boot.serialno "fake"
+# 由于只读限制和 SELinux 限制，此操作应当失败
+
+# 检查审核日志（audit log）中的拒绝信息
+adb shell dmesg | grep "avc.*property_service"
 ```
 
 ### 6.9.5 练习：持久化属性存储
 
+**检查持久化属性文件：**
+
 ```bash
-# 设置持久化属性
-adb shell setprop persist.myapp.enabled true
+# 检查持久化属性文件
+adb shell ls -la /data/property/
 
-# 检查属性值
-adb shell getprop persist.myapp.enabled
+# 该文件经由 protobuf 编码，无法直接阅读
+# 你可以使用十六进制转储（hex dump）进行查看
+adb shell xxd /data/property/persistent_properties | head -20
+```
 
-# root 后可检查持久化文件
-adb root
-adb shell ls -l /data/property/
-adb shell ls -l /data/property/persistent_properties
+**追踪持久化属性的写入：**
+
+```bash
+# 设置持久化属性并观察文件的更新
+adb shell "
+    ls -la /data/property/persistent_properties
+    setprop persist.mytest.timestamp \$(date +%s)
+    ls -la /data/property/persistent_properties
+"
+# 文件大小和修改时间应当会发生变化
 ```
 
 ### 6.9.6 练习：属性派生链
+
+**追踪产品属性的派生：**
+
+```bash
+# 查看 ro.product.model 的来源
+# 检查每个来源分区：
+echo "System:     $(adb shell getprop ro.product.system.model)"
+echo "System_ext: $(adb shell getprop ro.product.system_ext.model)"
+echo "Vendor:     $(adb shell getprop ro.product.vendor.model)"
+echo "ODM:        $(adb shell getprop ro.product.odm.model)"
+echo "Product:    $(adb shell getprop ro.product.product.model)"
+echo ""
+echo "Final:      $(adb shell getprop ro.product.model)"
+echo "Source order: $(adb shell getprop ro.product.property_source_order)"
+```
+
+**检查构建指纹（Build Fingerprint）的组成部分：**
 
 ```bash
 echo "Brand:   $(adb shell getprop ro.product.brand)"
@@ -1314,26 +2106,39 @@ echo "ID:      $(adb shell getprop ro.build.id)"
 echo "Incr:    $(adb shell getprop ro.build.version.incremental)"
 echo "Type:    $(adb shell getprop ro.build.type)"
 echo "Tags:    $(adb shell getprop ro.build.tags)"
+echo ""
 echo "Fingerprint: $(adb shell getprop ro.build.fingerprint)"
 ```
 
 ### 6.9.7 练习：通过属性控制服务
 
+**使用 ctl.* 属性控制服务：**
+
 ```bash
-# 列出运行中服务
+# 列出正在运行的服务
 adb shell getprop | grep "init.svc\." | grep running
 
-# 查看具体服务状态
+# 检查特定服务的状态
 adb shell getprop init.svc.adbd
 
-# 通过 ctl 属性重启服务
+# 通过 ctl 属性重启服务（需要相应权限）
 adb root
 adb shell setprop ctl.restart adbd
+
+# 观察服务状态的变化
+adb shell "
+    echo 'Before: '$(getprop init.svc.adbd)
+    setprop ctl.restart adbd
+    sleep 1
+    echo 'After:  '$(getprop init.svc.adbd)
+"
 ```
 
-### 6.9.8 练习：构建 `sysprop_library`
+### 6.9.8 练习：构建 sysprop_library
 
-创建 `.sysprop` 文件：
+**创建一个极简的 sysprop_library：**
+
+创建一个 `.sysprop` 文件：
 
 ```protobuf
 # my_module/MyAppProperties.sysprop
@@ -1367,26 +2172,33 @@ sysprop_library {
 }
 ```
 
-生成库提供类型安全访问：
+构建完成后，生成的库将提供类型安全的访问方式：
 
 ```java
+// 生成的 Java 用法
 import com.example.MyAppProperties;
 
+// 类型安全的布尔值 Getter (返回 Optional<Boolean>)
 Optional<Boolean> debug = MyAppProperties.debug_enabled();
 if (debug.orElse(false)) {
     Log.d(TAG, "Debug mode is enabled");
 }
 
+// 类型安全的整数 Getter
 Optional<Integer> maxConn = MyAppProperties.max_connections();
 int connections = maxConn.orElse(10);
 
+// 类型安全的 Setter
 MyAppProperties.debug_enabled(true);
 MyAppProperties.max_connections(20);
 ```
 
 ### 6.9.9 练习：测量属性读取性能
 
+**基准测试属性读取：**
+
 ```bash
+# 计时 10000 次属性读取
 adb shell "
     START=\$(date +%s%N)
     for i in \$(seq 1 10000); do
@@ -1399,51 +2211,54 @@ adb shell "
 "
 ```
 
-`getprop` 包含进程创建开销。真实共享内存查询通常远低于 1 微秒。更准确的 benchmark 应使用 native 程序直接调用 `__system_property_find()` 与 `__system_property_read_callback()`。
+请注意，`getprop` 涉及进程创建的开销。实际的共享内存查找速度要快得多（通常在 1 微秒以下）。更准确的基准测试应当使用一个直接调用 `__system_property_find()` 和 `__system_property_read_callback()` 的 native 程序。
 
-### 6.9.10 练习：探索内存中的 Property Trie
+### 6.9.10 练习：在内存中探索属性前缀树（Trie）
+
+**使用 debuggerd 检查属性内存映射：**
 
 ```bash
-# 查看 init 映射的 property 区域
+# 查找 init 进程
 adb shell "cat /proc/1/maps | grep __properties__"
+# 这将显示 init 的内存映射属性区域
 
-# 查看其他进程映射
+# 对于任何其他进程，将 1 替换为 PID：
 PID=$(adb shell pidof com.android.systemui)
 adb shell "cat /proc/$PID/maps | grep __properties__"
 ```
 
-这个练习可以看到：每个进程的 property area 虚拟地址可能不同，但它们都通过共享内存映射文件引用同一批物理页。
+此练习揭示了每个进程虽然可能在不同的虚拟地址映射属性区域，但它们都通过共享内存映射文件引用了同一批物理页。
 
 ---
 
 ## 总结
 
-Android 系统属性看起来只是简单键值机制，但在接口背后隐藏了大量复杂性。它通过多个子系统协作实现了设计目标：
+Android 的系统属性是一个看似简单的机制，但在其键值接口之下隐藏了相当大的复杂性。该架构通过几个相互协作的子系统实现了其设计目标：
 
-1. **无锁读取**：通过内存映射文件和基于 trie 的查找结构实现，并利用 atomic 操作与 dirty-backup-area 协议保证一致性。
+1. **无锁读取**：通过内存映射文件和基于前缀树（trie）的查找结构实现，利用原子操作和“脏数据备份协议”在不使用锁的情况下确保一致性。
 
-2. **集中写入**：所有写入都经由 init 的 property service，通过 Unix domain socket 接收请求并统一修改共享内存。
+2. **集中写入**：通过 init 的 property service 进行，它通过 Unix domain socket 接收请求，并调解对共享内存的所有更改。
 
-3. **SELinux 强制执行**：每个属性 context 都有独立 property area 文件，文件本身由内核和 SELinux 执行访问控制。
+3. **SELinux 强制执行**：通过按上下文划分的属性区域文件实现，其中每个 SELinux 上下文都拥有自己的内存映射文件，并由内核强制执行访问控制。
 
-4. **类型化、受 API 管理的属性**：`sysprop_library` 生成 Java、C++ 和 Rust 的类型安全访问器，同时强制 API 兼容性。
+4. **类型化、受 API 管理的属性**：通过 `sysprop_library` 构建系统模块实现，该模块在 Java、C++ 和 Rust 中生成类型安全的访问器，同时强制执行 API 兼容性。
 
-5. **分区隔离**：Treble 对齐的 ownership 模型明确划分 platform、vendor 和 ODM 属性边界及访问规则。
+5. **分区隔离**：通过与 Treble 对齐的所有权模型实现，其中平台（platform）、厂商（vendor）和 ODM 属性具有明确定义的边界和访问规则。
 
-系统属性相关的关键源码如下：
+系统属性的核心源文件包括：
 
 | 组件 | 路径 |
 |-----------|------|
-| Property service（init） | `system/core/init/property_service.cpp` |
+| 属性服务 (init) | `system/core/init/property_service.cpp` |
 | 持久化属性 | `system/core/init/persistent_properties.cpp` |
-| 共享内存 trie | `bionic/libc/system_properties/prop_area.cpp` |
-| `prop_info` 结构 | `bionic/libc/system_properties/include/system_properties/prop_info.h` |
-| Trie 节点结构 | `bionic/libc/system_properties/include/system_properties/prop_area.h` |
+| 共享内存前缀树 | `bionic/libc/system_properties/prop_area.cpp` |
+| prop_info 结构 | `bionic/libc/system_properties/include/system_properties/prop_info.h` |
+| 前缀树节点结构 | `bionic/libc/system_properties/include/system_properties/prop_area.h` |
 | 系统属性核心 | `bionic/libc/system_properties/system_properties.cpp` |
 | NDK API | `bionic/libc/bionic/system_property_api.cpp` |
-| 序列化 context | `bionic/libc/system_properties/contexts_serialized.cpp` |
-| Property info trie | `system/core/property_service/libpropertyinfoparser/include/property_info_parser/property_info_parser.h` |
+| 序列化上下文 | `bionic/libc/system_properties/contexts_serialized.cpp` |
+| 属性信息前缀树 | `system/core/property_service/libpropertyinfoparser/include/property_info_parser/property_info_parser.h` |
 | Java API | `frameworks/base/core/java/android/os/SystemProperties.java` |
-| Soong `sysprop_library` | `build/soong/sysprop/sysprop_library.go` |
-| 平台 property contexts | `system/sepolicy/private/property_contexts` |
-| 示例 `.sysprop` 文件 | `system/libsysprop/srcs/android/sysprop/BluetoothProperties.sysprop` |
+| Soong sysprop_library | `build/soong/sysprop/sysprop_library.go` |
+| 平台属性上下文 | `system/sepolicy/private/property_contexts` |
+| 示例 .sysprop 文件 | `system/libsysprop/srcs/android/sysprop/BluetoothProperties.sysprop` |

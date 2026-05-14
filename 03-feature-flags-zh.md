@@ -2466,7 +2466,7 @@ public void myNewApi() {
 
 ---
 
-## 3.9  Try It
+## 3.9 动手实践
 
 下面这些练习会带你走完整个 aconfig 工作流，从声明一个 flag 到在多种状态下测试它。
 
@@ -2955,7 +2955,7 @@ cat build/make/tools/aconfig/aconfig_storage_file/protos/\
 
 ---
 
-## Summary
+## 小结
 
 aconfig 特性开关系统，代表了 Android 在“代码开发”与“功能可用性”之间的一次根本性转型。它对平台的关键贡献可以概括为：
 
@@ -2987,7 +2987,7 @@ aconfig 特性开关系统，代表了 Android 在“代码开发”与“功能
 
 ---
 
-## Key Source Files
+### 关键源码文件
 
 | 路径 | 说明 |
 |------|-------------|

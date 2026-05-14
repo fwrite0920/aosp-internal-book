@@ -1031,7 +1031,7 @@ adb shell dmctl status system
 
 ---
 
-## Summary
+## 小结
 
 Android 安全并不是单一功能，而是一组相互独立又彼此补强的机制组合：
 

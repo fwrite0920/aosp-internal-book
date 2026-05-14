@@ -970,7 +970,7 @@ adb shell device_config put credential_manager enable_credential_manager true
 7. provider 最终返回 `GetCredentialResponse`。
 8. session 清理完成。
 
-## Summary
+## 小结
 
 Credential Manager 把 Android 上原本割裂的密码、Passkey、联合登录和数字凭据访问收拢到统一框架里，核心价值不只是“统一 API”，更是把安全边界、UI 仲裁、provider 插拔、并行聚合和跨版本迁移路径都纳入了系统层设计。
 

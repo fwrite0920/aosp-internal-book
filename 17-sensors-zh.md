@@ -302,82 +302,21 @@ HEAD_TRACKER 传感器面向空间音频场景，提供头部姿态相关数据�
 
 ---
 
-## 17.9 动手实践 —— 传感器实验
+## 17.9 车载与可穿戴扩展
 
-### 17.9.1 列出设备上的所有传感器
-
-使用 `dumpsys sensorservice` 或测试应用列出设备当前所有传感器及其静态能力。
-
-### 17.9.2 实时监控传感器事件
-
-```bash
-# List all sensors
-adb shell dumpsys sensorservice
-# Watch accelerometer events (requires root or debug build)
-adb shell dumpsys sensorservice --proto
-```
-
-### 17.9.3 检查批处理行为
-
-通过启用某个高频传感器并设置较大 batch latency，观察事件是否按批量突发到达。
-
-### 17.9.4 使用 Direct Channel
-
-编写测试应用创建 direct channel，验证更低延迟的数据路径是否可用。
-
-### 17.9.5 注入测试数据
-
-```bash
-# Enable data injection mode
-# From a test app with matching package name:
-# Use SensorManager.injectSensorData() to inject events
-```
-
-### 17.9.6 追踪传感器性能
-
-```bash
-# Enable sensor atrace category
-# ... exercise sensors ...
-# Open in Perfetto UI: ui.perfetto.dev
-```
-
-### 17.9.7 监控功耗影响
-
-```bash
-# Battery historian can show wake lock durations
-# Exercise sensors for a period
-# Upload to Battery Historian: bathist.cs.android.com
-```
-
-### 17.9.8 检查传感器融合状态
-
-可通过 `dumpsys sensorservice` 观察虚拟传感器、融合器状态和启用情况。
-
-### 17.9.9 测试动态传感器
-
-连接或断开支持动态传感器的外设，观察系统是否发布正确的动态注册事件。
-
-### 17.9.10 阅读源码
-
-建议从 `SensorService.cpp`、`SensorDevice.cpp`、`SensorFusion.cpp` 和 Java `SystemSensorManager` 开始阅读。
-
----
-
-## 17.10 车载与可穿戴扩展
-
-### 17.10.1 有限轴 IMU 传感器（车载）
+### 17.9.1 有限轴 IMU 传感器（车载）
 
 车载设备可能只暴露有限轴向的 IMU 数据，系统需要在框架与融合层适配这些非标准配置。
 
-### 17.10.2 航向传感器（车载）
+### 17.9.2 航向传感器（车载）
 
 航向传感器对导航和车辆姿态推断很重要，通常与车载坐标系和车速信息联动。
 
-### 17.10.3 可穿戴专用传感器
+### 17.9.3 可穿戴专用传感器
 
 可穿戴设备更关注功耗、身体传感器、姿态和低速率融合策略。
 
-### 17.10.4 可穿戴融合速率调优
+### 17.9.4 可穿戴融合速率调优
 
 可穿戴设备常在 `device.mk` 或设备配置中降低融合更新频率，以换取更长续航。
 
@@ -387,61 +326,61 @@ adb shell dumpsys sensorservice --proto
 
 ---
 
-## 17.11 传感器坐标系
+## 17.10 传感器坐标系
 
-### 17.11.1 标准 Android 传感器坐标系
+### 17.10.1 标准 Android 传感器坐标系
 
 Android 为传感器数据定义统一右手坐标系，保证应用可在不同设备上以一致语义解释数据。
 
-### 17.11.2 East-North-Up 坐标系
+### 17.10.2 East-North-Up 坐标系
 
 地理参考系常用 ENU（东-北-上）表示，适合地理方向和导航类推断。
 
-### 17.11.3 Head-Centric 坐标系
+### 17.10.3 Head-Centric 坐标系
 
 头部跟踪场景会使用以用户头部为中心的坐标系，用于空间音频和 XR 相关处理。
 
-### 17.11.4 四元数约定
+### 17.10.4 四元数约定
 
 姿态类事件常以 quaternion 表示。系统必须明确分量顺序、手性和旋转方向约定，避免跨组件解释不一致。
 
 ---
 
-## 17.12 传感器校准与附加信息
+## 17.11 传感器校准与附加信息
 
-### 17.12.1 已校准与未校准传感器
+### 17.11.1 已校准与未校准传感器
 
 已校准传感器通常经过 bias 补偿，更便于普通应用使用；未校准传感器保留原始测量和 bias 信息，更适合专业算法。
 
-### 17.12.2 `ADDITIONAL_INFO` 事件
+### 17.11.2 `ADDITIONAL_INFO` 事件
 
 `ADDITIONAL_INFO` 事件可携带校准、温度或其他扩展上下文，帮助高级应用更正确解释数据。
 
-### 17.12.3 基于 HMAC 的传感器 ID
+### 17.11.3 基于 HMAC 的传感器 ID
 
 HMAC-based 传感器 ID 用于在保护隐私前提下为传感器提供稳定标识，避免直接暴露可被跨设备跟踪的硬件身份。
 
 ---
 
-## 17.13 传感器测试与调试
+## 17.12 传感器测试与调试
 
-### 17.13.1 CTS 传感器测试
+### 17.12.1 CTS 传感器测试
 
 CTS 覆盖 API 行为、速率上限、批处理、触发器和隐私等兼容性要求。
 
-### 17.13.2 VTS 传感器测试
+### 17.12.2 VTS 传感器测试
 
 VTS 更偏向 HAL 侧行为与接口一致性，验证 vendor 实现是否符合平台要求。
 
-### 17.13.3 Dumpsys 输出格式
+### 17.12.3 Dumpsys 输出格式
 
 `dumpsys sensorservice` 提供注册情况、激活状态、客户端列表、批处理参数和动态传感器信息，是调试核心入口。
 
-### 17.13.4 Proto 格式 Dump
+### 17.12.4 Proto 格式 Dump
 
 Proto dump 适合结构化分析和自动化工具消费。
 
-### 17.13.5 常见调试场景
+### 17.12.5 常见调试场景
 
 常见问题包括：
 
@@ -454,39 +393,98 @@ Proto dump 适合结构化分析和自动化工具消费。
 
 ---
 
-## 17.14 传感器事件数据结构
+## 17.13 传感器事件数据结构
 
-### 17.14.1 Native `sensors_event_t`
+### 17.13.1 Native `sensors_event_t`
 
 `sensors_event_t` 是 native 层核心事件结构，包含传感器 handle、时间戳、类型和 union 形式的 payload。
 
-### 17.14.2 Java `SensorEvent`
+### 17.13.2 Java `SensorEvent`
 
 Java `SensorEvent` 是对 native 事件的高层封装，面向应用回调使用。
 
-### 17.14.3 AIDL `Event` Parcelable
+### 17.13.3 AIDL `Event` Parcelable
 
 新 HAL 路径下，AIDL `Event` parcelable 为 framework 与 vendor 之间提供更稳定的结构化事件模型。
 
 ---
 
-## 17.15 Sensor HAL 实现指南
+## 17.14 Sensor HAL 实现指南
 
-### 17.15.1 默认参考实现
+### 17.14.1 默认参考实现
 
 AOSP 提供默认参考实现，帮助设备 bring-up 和 HAL 行为对齐。
 
-### 17.15.2 事件写入模式
+### 17.14.2 事件写入模式
 
 HAL 实现应遵循固定事件写入模式：填充时间戳、sensor handle、payload，保证事件顺序并正确使用 FMQ 通知机制。
 
-### 17.15.3 Multi-HAL 集成
+### 17.14.3 Multi-HAL 集成
 
 多 HAL 集成时，需要保证 handle 唯一、事件归属正确、动态传感器一致性和 direct channel 行为统一。
 
-## Summary
+## 17.15 动手实践：传感器练习
 
-## 总结
+### 17.15.1 列出设备上的所有传感器
+
+使用 `dumpsys sensorservice` 或测试应用列出设备当前所有传感器及其静态能力。
+
+### 17.15.2 实时监控传感器事件
+
+```bash
+# List all sensors
+adb shell dumpsys sensorservice
+# Watch accelerometer events (requires root or debug build)
+adb shell dumpsys sensorservice --proto
+```
+
+### 17.15.3 检查批处理行为
+
+通过启用某个高频传感器并设置较大 batch latency，观察事件是否按批量突发到达。
+
+### 17.15.4 使用 Direct Channel
+
+编写测试应用创建 direct channel，验证更低延迟的数据路径是否可用。
+
+### 17.15.5 注入测试数据
+
+```bash
+# Enable data injection mode
+# From a test app with matching package name:
+# Use SensorManager.injectSensorData() to inject events
+```
+
+### 17.15.6 追踪传感器性能
+
+```bash
+# Enable sensor atrace category
+# ... exercise sensors ...
+# Open in Perfetto UI: ui.perfetto.dev
+```
+
+### 17.15.7 监控功耗影响
+
+```bash
+# Battery historian can show wake lock durations
+# Exercise sensors for a period
+# Upload to Battery Historian: bathist.cs.android.com
+```
+
+### 17.15.8 检查传感器融合状态
+
+可通过 `dumpsys sensorservice` 观察虚拟传感器、融合器状态和启用情况。
+
+### 17.15.9 测试动态传感器
+
+连接或断开支持动态传感器的外设，观察系统是否发布正确的动态注册事件。
+
+### 17.15.10 阅读源码
+
+建议从 `SensorService.cpp`、`SensorDevice.cpp`、`SensorFusion.cpp` 和 Java `SystemSensorManager` 开始阅读。
+
+---
+
+## 小结
 
 Android 传感器系统的核心设计可概括为以下几点：
 

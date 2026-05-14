@@ -100,18 +100,6 @@ CDM 在系统启动时需要等包管理、用户和蓝牙相关状态都准备�
 
 `CompanionDeviceManagerService` 通过内部 Binder stub 对 framework 暴露能力。这里的关键点不是 Binder 本身，而是服务在 Binder 入口统一完成权限校验、用户维度处理和参数归一化。
 
-### 51.1.6 Shell 命令接口
-
-CDM 提供 `CompanionDeviceShellCommand` 之类的调试入口，用于：
-
-- 查看关联
-- 创建测试关联
-- 修改传输类型
-- 查询虚拟设备
-- 做状态诊断
-
-新型系统框架如果没有 shell 命令，调试成本会非常高，CDM/VDM 明显吸取了这方面的经验。
-
 ## 51.2 设备关联与发现
 
 ### 51.2.1 关联数据模型
@@ -500,7 +488,16 @@ adb logcat -s VirtualAudioController
 adb logcat -s CameraAccessController
 ```
 
-## Summary
+### 51.7.10 Key Source Files Reference
+
+| 组件 | 路径 |
+|---|---|
+| CDM 服务入口 | `frameworks/base/services/companion/java/com/android/server/companion/CompanionDeviceManagerService.java` |
+| VDM 服务入口 | `frameworks/base/services/companion/java/com/android/server/companion/virtual/VirtualDeviceManagerService.java` |
+| 虚拟设备实现 | `frameworks/base/services/companion/java/com/android/server/companion/virtual/VirtualDeviceImpl.java` |
+| 窗口策略 | `frameworks/base/services/companion/java/com/android/server/companion/virtual/GenericWindowPolicyController.java` |
+
+## 小结
 
 `CompanionDeviceManager` 与 `VirtualDeviceManager` 共同构成了 Android 多设备协作和远端计算表面的基础设施。CDM 解决的是“信任关系与通道”的问题，VDM 解决的是“如何把一个受信远端设备变成 Android 可管理的虚拟执行环境”的问题。
 
@@ -514,15 +511,6 @@ adb logcat -s CameraAccessController
 - `GenericWindowPolicyController` 是虚拟显示安全模型的核心，它决定哪些 Activity 和窗口可以出现在外部表面上，防止敏感内容泄露到不受信显示。
 - 从完整链路看，CDM 提供信任和数据通道，VDM 提供显示与执行环境，两者合起来支撑了手表协同、车机扩展、桌面级 app streaming 以及 AI 驱动的远端控制场景。
 
-### 关键源码路径
-
-| 组件 | 路径 |
-|---|---|
-| CDM 服务入口 | `frameworks/base/services/companion/java/com/android/server/companion/CompanionDeviceManagerService.java` |
-| CDM Internal API | `frameworks/base/services/companion/java/com/android/server/companion/CompanionDeviceManagerServiceInternal.java` |
-| Shell 命令 | `frameworks/base/services/companion/java/com/android/server/companion/CompanionDeviceShellCommand.java` |
-| 配置 | `frameworks/base/services/companion/java/com/android/server/companion/CompanionDeviceConfig.java` |
-| 关联请求处理 | `frameworks/base/services/companion/java/com/android/server/companion/association/AssociationRequestsProcessor.java` |
 | 关联存储 | `frameworks/base/services/companion/java/com/android/server/companion/association/AssociationStore.java` |
 | 磁盘持久化 | `frameworks/base/services/companion/java/com/android/server/companion/association/AssociationDiskStore.java` |
 | 解除关联 | `frameworks/base/services/companion/java/com/android/server/companion/association/DisassociationProcessor.java` |

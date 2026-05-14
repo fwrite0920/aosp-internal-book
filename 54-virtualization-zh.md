@@ -450,55 +450,55 @@ HAL 通过标准服务注册流程进入系统。对 AVF 来说，这一步的�
 
 `vm info`、framework API 和调试工具最终都要回到一组统一的 hypervisor 属性，例如 KVM 是否存在、protected VM 是否支持、版本号是多少、某些扩展是否启用。
 
-## 54.9 Rollback Protection
+## 54.8 Rollback Protection
 
-### 54.9.1 概览
+### 54.8.1 概览
 
 如果 VM 能随便回滚到旧镜像，那所有“已修复漏洞”都能被重新带回系统。AVF 因此把 rollback protection 作为核心安全特性，而不是额外选项。
 
-### 54.9.2 回滚保护策略
+### 54.8.2 回滚保护策略
 
 原文覆盖了多种策略：基于实例镜像、基于版本计数、基于受保护存储以及与 DICE / Secretkeeper 结合的方案。它们共同目标是防止旧状态在新策略下被重复接受。
 
-## 54.10 Configuration Data Deep Dive
+## 54.9 Configuration Data Deep Dive
 
-### 54.10.1 配置解析器实现
+### 54.9.1 配置解析器实现
 
 `pvmfw` 里的配置解析器承担“读取不可信输入，然后生成可信启动语义”的责任，所以它既要能识别版本与 entry 类型，也要对越界、缺失、顺序错误和多余字段保持严格。
 
-### 54.10.2 Entry 类型
+### 54.9.2 Entry 类型
 
 配置 entry 会覆盖 payload、调试策略、回滚保护、设备分配、密钥材料和其他启动控制字段。把它们做成显式类型，而不是 ad-hoc blob，是为了保证审计与兼容性。
 
-### 54.10.3 版本协商
+### 54.9.3 版本协商
 
 版本协商不是为了“尽量兼容一切”，而是为了在安全前提下允许新旧版本共存。安全系统里最危险的往往是静默兼容，因为它意味着错误配置可能被误当成合法输入。
 
-### 54.10.4 错误处理
+### 54.9.4 错误处理
 
 对 `pvmfw` 来说，配置解析失败时最安全的行为通常是拒绝启动，而不是猜测意图继续往下跑。
 
-## 54.11 Device Tree Handling in pvmfw
+## 54.10 Device Tree Handling in pvmfw
 
-### 54.11.1 FDT 清洗
+### 54.10.1 FDT 清洗
 
 `pvmfw` 必须把传入 FDT 中不该暴露给来宾的信息剥掉，例如宿主侧细节、未授权设备描述或不安全参数。FDT 不是普通配置文件，而是直接影响来宾可见硬件边界的安全输入。
 
-### 54.11.2 为下一阶段修改设备树
+### 54.10.2 为下一阶段修改设备树
 
 在清洗之后，`pvmfw` 还要补充内核真正需要的信息，例如内存区、chosen 节点、bootargs、共享页或设备分配后的节点。
 
-### 54.11.3 FDT 的安全边界
+### 54.10.3 FDT 的安全边界
 
 理解这一节时要抓住一点：`pvmfw` 不是被动转发设备树，而是在主动定义“来宾世界长什么样”。这个边界如果守不住，宿主就能通过伪造硬件描述绕过大量安全假设。
 
-## 54.12 `vmbase`：公共 VM 基础库
+## 54.11 `vmbase`：公共 VM 基础库
 
-### 54.12.1 目标
+### 54.11.1 目标
 
 `vmbase` 为 `pvmfw` 之类的 VM 基础二进制提供公共设施，避免每个早期启动组件都自己实现一套内存、日志、异常和平台兼容逻辑。
 
-### 54.12.2 提供的基础设施
+### 54.11.2 提供的基础设施
 
 通常包括：
 
@@ -508,107 +508,155 @@ HAL 通过标准服务注册流程进入系统。对 AVF 来说，这一步的�
 - 平台兼容层
 - 与 `no_std` 场景配套的运行时组件
 
-### 54.12.3 源码组织
+### 54.11.3 源码组织
 
 把这些公共逻辑集中起来可以显著降低高敏感早期代码的重复实现量，也更利于做安全审计和 fuzz。
 
-### 54.12.4 为自定义二进制使用 `vmbase`
+### 54.11.4 为自定义二进制使用 `vmbase`
 
 如果 OEM 或平台要引入新的早期 VM 组件，复用 `vmbase` 能保持与 `pvmfw` 相似的运行模型，而不是另起炉灶做出一份不可维护的早期代码。
 
-### 54.12.5 `vmbase` 中的内存管理
+### 54.11.5 `vmbase` 中的内存管理
 
 这一层的内存管理目标不是“功能最强”，而是“启动足够早、行为足够明确、审计足够简单”。这和通用 OS 分配器的目标完全不同。
 
-## 54.13 Device Assignment in Detail
+## 54.12 Device Assignment in Detail
 
-### 54.13.1 架构
+### 54.12.1 架构
 
 设备分配允许某些硬件资源以严格受控方式暴露给 VM。它的风险远高于纯软件 `virtio` 设备，因此整个链路必须由配置、能力、设备树和 `pvmfw` 验证共同约束。
 
-### 54.13.2 VM DTBO 结构
+### 54.12.2 VM DTBO 结构
 
 VM DTBO 描述了分配给 VM 的设备节点和属性。把它单独成形而不是直接混进主 FDT，有助于在验证阶段更精细地控制可接受字段。
 
-### 54.13.3 `pvmfw` 的设备分配校验
+### 54.12.3 `pvmfw` 的设备分配校验
 
 `pvmfw` 需要确认 DTBO 中的设备既在允许列表内，又没有携带会破坏隔离语义的属性。这里的核心不是“设备能不能工作”，而是“设备会不会打穿安全边界”。
 
-### 54.13.4 IOMMU Token 验证
+### 54.12.4 IOMMU Token 验证
 
 IOMMU token 用来证明某个设备映射请求来自合法路径。没有这一步，恶意宿主可能伪造设备授权，让 DMA 重新接触到不该看到的内存。
 
-## 54.14 Async I/O in crosvm
+## 54.13 Async I/O in crosvm
 
-### 54.14.1 `cros_async` 运行时
+### 54.13.1 `cros_async` 运行时
 
 `crosvm` 使用 `cros_async` 处理大量异步 I/O。这样控制面、块设备、网络与队列事件可以在统一运行时中调度，而不是混成不可维护的线程风暴。
 
-### 54.14.2 Virtio 队列处理
+### 54.13.2 Virtio 队列处理
 
 virtio 队列处理的关键是 descriptor 链解析、guest 内存访问、完成中断和错误回传。这里既是性能热点，也是设备模拟最容易出错的地方。
 
-### 54.14.3 VirtIO 传输层
+### 54.13.3 VirtIO 传输层
 
 Android 侧大多数 VM 设备都偏向 virtio，因为它足够标准、足够简单，也更适合与轻量 guest 协同演进。
 
-## 54.15 Network and Display Support
+## 54.14 Network and Display Support
 
-### 54.15.1 网络支持
+### 54.14.1 网络支持
 
 AVF 可以为 VM 提供网络能力，但默认并不是“把宿主网络完整镜像进去”。网络通常通过 `virtio-net`、受控转发和策略开关启用。对安全负载来说，网络本身就是巨大攻击面，应按需开启。
 
-### 54.15.2 显示支持
+### 54.14.2 显示支持
 
 大多数 `Microdroid` 负载是无头的，但 AVF 也支持图形与显示路径，主要依赖 `virtio-gpu` 和宿主转发链路。图形支持的存在说明 AVF 不是只能做后端计算，还可承载受控交互式 Linux VM。
 
-## 54.16 Running Linux with Graphics Acceleration
+## 54.15 Running Linux with Graphics Acceleration
 
 这一大节说明 AVF 并不只服务 `Microdroid` 最小负载，也可以承载更完整的 Linux 用户空间。
 
-### 54.16.1 架构概览
+### 54.15.1 架构概览
 
 图形加速 Linux VM 的路径通常包括 `crosvm`、`virtio-gpu`、宿主显示转发和输入回传。和桌面虚拟化不同，Android 更强调在移动设备约束下做到“可用且受控”，而不是追求极致硬件直通。
 
-### 54.16.2 `TerminalApp`：Linux VM 前端
+### 54.15.2 `TerminalApp`：Linux VM 前端
 
 `TerminalApp` 代表一种前端集成形态：宿主应用负责用户入口、会话管理和显示容器，真正的 Linux 用户空间运行在 VM 内部。这种模式很适合开发工具、隔离式 shell 或受控 Linux 运行时。
 
-### 54.16.3 图形加速模式
+#### 虚拟机启动流程
+
+VM 启动流程从 TerminalApp 或 CLI 发起，经过配置组装、VirtualizationService 校验、virtmgr 准备资源，最终由 crosvm 创建来宾环境。
+
+#### 显示配置
+
+显示配置需要描述分辨率、surface、后端类型和输入转发方式，保证 Linux 桌面输出能映射到 Android display 管线。
+
+### 54.15.3 图形加速模式
 
 不同设备或构建可能启用不同程度的图形支持：纯软件路径、受限 GPU 转发或更完整的 `virtio-gpu` 加速。AVF 通过特性开关控制这些能力，而不是假设所有硬件都一致。
 
-### 54.16.4 显示转发流水线
+#### Gfxstream 配置
+
+Gfxstream 模式把来宾图形 API 转换为 host 可执行的图形命令，是 Android 上运行图形 Linux VM 的关键路径之一。
+
+#### 图形加速选择
+
+系统会根据设备能力、feature flag 和 VM 配置选择软件渲染、virtio-gpu 或 gfxstream 等不同图形路径。
+
+### 54.15.4 显示转发流水线
 
 显示转发的核心问题是：来宾生成的帧如何传给宿主、宿主如何合成、同步与缓冲如何处理。它既影响体验，也影响隔离，因为图形共享内存天然敏感。
 
-### 54.16.5 输入转发
+#### `ICrosvmAndroidDisplayService` AIDL
+
+`ICrosvmAndroidDisplayService` 用于在 crosvm 与 Android 显示后端之间传递显示会话和 surface 相关控制。
+
+#### Android 显示后端（C++）
+
+C++ 显示后端负责把来宾帧接入 Android native 图形基础设施，并协调 buffer、surface 和显示刷新。
+
+### 54.15.5 输入转发
 
 输入需要从宿主 UI 传给来宾。这里必须处理焦点、事件翻译、权限和生命周期，避免输入在多 VM 或多窗口情况下串到错误目标。
 
-### 54.16.6 Debian VM 配置
+#### 按键码转换
+
+输入转发需要把 Android key code、触摸事件和指针事件转换为来宾 Linux 可理解的输入事件。
+
+#### 输入模式检测
+
+系统需要识别当前是触摸、键盘、鼠标还是混合输入模式，以便给来宾发送正确事件语义。
+
+### 54.15.6 Debian VM 配置
 
 原文给了运行带图形 Linux VM 的配置示例。工程上这类示例的意义在于证明 AVF 能承载比 `Microdroid` 更丰富的用户空间，但同时也暴露出更多性能和设备兼容性要求。
 
-### 54.16.7 特性开关
+#### Debian 镜像构建
+
+Debian 镜像构建负责准备 rootfs、必要驱动、图形组件和终端集成，使其能作为 Android 管理的 VM payload 运行。
+
+### 54.15.7 特性开关
 
 图形、网络、vendor 模块、设备分配和 host service 等能力都依赖构建期开关。你能否在设备上看到某个选项，往往首先取决于它有没有被编进 `vm` 与 `crosvm`。
 
-### 54.16.8 `virtio-gpu` 能力
+### 54.15.8 `virtio-gpu` 能力
 
 `virtio-gpu` 是图形支持的核心接口层。它决定 guest 如何请求 buffer、提交命令以及与宿主渲染路径协作。
 
-### 54.16.9 使用场景
+### 54.15.9 使用场景
 
 典型使用场景包括隔离开发环境、受保护终端、特定 OEM Linux 工作负载，以及需要把 Linux 用户空间与宿主 Android 明确隔离的系统工具。
 
-## 54.17 Security Analysis
+#### Android 设备上的桌面 Linux
 
-### 54.17.1 信任边界
+桌面 Linux 场景强调完整 GUI、键鼠输入、窗口显示和文件交互。
+
+#### 开发环境
+
+开发环境场景强调工具链、shell、包管理器和与 Android host 的受控互通。
+
+#### 安全隔离
+
+安全隔离场景强调把不受信工作负载放进 VM 边界内运行，降低 host 暴露面。
+
+## 54.16 Security Analysis
+
+### 54.16.1 信任边界
 
 本章最重要的安全结论是：AVF 明确把宿主 Android 视为对 pVM 来说“不必完全可信”。真正的信任边界位于 `pKVM`、`pvmfw`、DICE 链和受控共享内存协议。
 
-### 54.17.2 攻击面分析
+### 54.16.2 攻击面分析
 
 主要攻击面包括：
 
@@ -621,185 +669,185 @@ AVF 可以为 VM 提供网络能力，但默认并不是“把宿主网络完整
 
 AVF 的设计思路是逐层缩小这些攻击面，而不是假设其中任何一层永远不会出错。
 
-### 54.17.3 Rust 的安全收益
+### 54.16.3 Rust 的安全收益
 
 `crosvm` 与 `pvmfw` 使用 Rust，并不意味着系统自动安全，但它确实大幅压低了传统 C/C++ VMM / firmware 最常见的内存破坏类问题。这在高价值攻击面上非常划算。
 
-### 54.17.4 DICE 链完整性
+### 54.16.4 DICE 链完整性
 
 DICE 链完整性决定了远程证明和密封存储是否真的可信。只要链中某层测量或交接被伪造，后续所有“这台 VM 是谁”的结论都会失效。
 
-## 54.18 Performance Considerations
+## 54.17 Performance Considerations
 
-### 54.18.1 内存开销
+### 54.17.1 内存开销
 
 VM 天生带来额外内存成本：来宾内核、页表、设备缓冲、共享页与镜像内容都要占空间。AVF 通过 `Microdroid` 极简化和按需设备启用尽量压低这部分成本。
 
-### 54.18.2 Huge Pages
+### 54.17.2 Huge Pages
 
 大页能减少页表开销和 TLB 压力，但也会影响内存碎片与分配灵活性。是否启用、在哪些区间启用，取决于来宾负载特征。
 
-### 54.18.3 CPU 拓扑
+### 54.17.3 CPU 拓扑
 
 VM vCPU 数和拓扑直接影响并行度、调度开销与能耗。移动设备上并不是 vCPU 越多越好，很多轻负载 VM 只需要少量 vCPU 就足够。
 
-### 54.18.4 I/O 性能调优
+### 54.17.4 I/O 性能调优
 
 原文列出了一组面向调试和实验的宿主参数调整，例如 compaction、swappiness 和 reclaim 相关开关。它们有助于分析 I/O 与内存回收对 VM 启动和运行性能的影响，但不应机械照抄到量产配置。
 
-## 54.19 Vsock Communication
+## 54.18 Vsock Communication
 
-### 54.19.1 概览
+### 54.18.1 概览
 
 `vsock` 是宿主与 VM、VM 与 VM 之间最重要的通信机制之一。它比把一堆 ad-hoc socket 暴露进 guest 更适合虚拟化场景，因为它直接以 CID 为寻址基础。
 
-### 54.19.2 CID 分配
+### 54.18.2 CID 分配
 
 CID 必须全局唯一且与 VM 生命周期绑定，这也是为什么 `VirtualizationService` 要集中管理实例与 CID。
 
-### 54.19.3 通信通道
+### 54.18.3 通信通道
 
 典型通道包括控制面、payload 服务、调试和 Binder over vsock。不同通道共享同一种底座，但安全级别和访问策略可以不同。
 
-### 54.19.4 Binder Over Vsock
+### 54.18.4 Binder Over Vsock
 
 Binder over vsock 让 Android 世界里熟悉的 RPC 模型可以延伸到 VM 边界上。不过这并不意味着把 Binder 原语原封不动搬进去，而是要在虚拟化约束下重新定义桥接与权限边界。
 
-## 54.20 Encrypted Storage
+## 54.19 Encrypted Storage
 
-### 54.20.1 架构
+### 54.19.1 架构
 
 AVF 的加密存储通常以实例为单位，与 VM 身份、回滚策略和密封密钥绑定。目标是让“拿到磁盘镜像副本”这件事本身没有意义。
 
-### 54.20.2 密钥派生
+### 54.19.2 密钥派生
 
 密钥通常从 DICE / `CDI_Seal` 及其实例化结果派生，因此同一份数据只有在正确设备、正确实例、正确启动链条件下才能再次解开。
 
-### 54.20.3 存储生命周期
+### 54.19.3 存储生命周期
 
 生命周期包括创建、首次密封、正常挂载、更新后重开、实例删除和回收。这里每一步都必须考虑升级、回滚与 debug policy。
 
-### 54.20.4 存储空间管理
+### 54.19.4 存储空间管理
 
 受保护存储需要同时兼顾大小限制、性能和恢复策略。把它当通用大容量磁盘来用并不现实。
 
-## 54.21 Updatable VMs and Secretkeeper
+## 54.20 Updatable VMs and Secretkeeper
 
-### 54.21.1 更新问题
+### 54.20.1 更新问题
 
 一旦 VM 可更新，旧密钥、旧状态和新镜像之间的关系就变复杂了。你必须回答：升级后哪些数据还能解、回滚后哪些数据必须拒绝、如何证明这是“同一个逻辑实例”的合法新版本。
 
-### 54.21.2 Secretkeeper 协议
+### 54.20.2 Secretkeeper 协议
 
 Secretkeeper 的角色就是在这种更新与信任迁移问题上提供更稳定的密钥 / 秘密管理语义，让机密材料不至于因为单次镜像升级就完全失控。
 
-### 54.21.3 供 Secretkeeper 使用的 VM Reference DT
+### 54.20.3 供 Secretkeeper 使用的 VM Reference DT
 
 为了让 Secretkeeper 判断某个 VM 是否符合预期，需要一份可比较、可验证的 VM 参考描述，设备树就是承载这类结构化信息的自然位置之一。
 
-## 54.22 Early VM（启动期 VM）
+## 54.21 Early VM（启动期 VM）
 
-### 54.22.1 概念
+### 54.21.1 概念
 
 Early VM 指在系统更早阶段启动的 VM，而不是等完整 Android 用户空间起来后再启动。这样做通常是为了让某些安全敏感工作负载尽早可用。
 
-### 54.22.2 与启动序列集成
+### 54.21.2 与启动序列集成
 
 把 VM 提前到 boot 流程中会引入新的排序要求：镜像何时可得、能力何时可探测、谁来托管生命周期、系统异常恢复怎么处理。
 
-## 54.23 Debugging Deep Dive
+## 54.22 Debugging Deep Dive
 
-### 54.23.1 调试策略
+### 54.22.1 调试策略
 
 AVF 不会把 protected VM 默认当普通开发进程那样随便调。是否允许控制台、GDB、`earlycon` 或更宽松日志，都要受 debug policy 限制。
 
-### 54.23.2 调试等级
+### 54.22.2 调试等级
 
 调试等级越高，排障越容易，但攻击面也越大。工程上必须把“开发便利性”和“受保护语义”分开处理。
 
-### 54.23.3 早期控制台 `earlycon`
+### 54.22.3 早期控制台 `earlycon`
 
 `earlycon` 对排查早期启动失败极其关键，因为很多问题发生在常规日志系统就绪之前。
 
-### 54.23.4 GDB 调试
+### 54.22.4 GDB 调试
 
 原文给了启动 GDB server、转发端口并附着调试的示例。对 protected VM 来说，这种调试能力必须只在明确允许时开放。
 
-### 54.23.5 设备树导出
+### 54.22.5 设备树导出
 
 设备树导出是排查“为什么来宾看到了这个硬件 / 没看到那个参数”的最高效方法之一。
 
-### 54.23.6 VM 回调调试
+### 54.22.6 VM 回调调试
 
 除了 guest 内部日志，宿主对回调事件的观察同样重要，因为很多问题其实出在服务端生命周期或控制通道，而不是来宾内核。
 
-## 54.24 Testing Infrastructure
+## 54.23 Testing Infrastructure
 
-### 54.24.1 测试套件
+### 54.23.1 测试套件
 
 AVF 包括 host test、app test、VTS 与针对 DICE、`Microdroid`、能力 HAL 的专项测试。对于这种跨内核、APEX、VMM、来宾镜像的系统，不可能只靠单元测试兜住。
 
-### 54.24.2 DICE 链验证测试
+### 54.23.2 DICE 链验证测试
 
 DICE 是安全核心，所以必须有单独测试验证链条格式、测量值和证书关系，而不是把它藏在“VM 能启动”这种粗粒度成功条件后面。
 
-### 54.24.3 运行特定测试
+### 54.23.3 运行特定测试
 
 原文列出了运行全部 `Microdroid` host tests、单个 DICE 测试以及能力 HAL VTS 的命令。定位问题时，先缩小到最小失败用例比一遍遍全量跑更有效。
 
-### 54.24.4 测试 VM 配置
+### 54.23.4 测试 VM 配置
 
 测试环境通常会刻意构造更激进的配置组合，以覆盖调试模式、受保护模式、不同 payload 和异常输入。
 
-## 54.25 Build System Integration
+## 54.24 Build System Integration
 
-### 54.25.1 APEX 构建
+### 54.24.1 APEX 构建
 
 `com.android.virt` APEX 是构建集成的中心。只要这个 APEX 打包不对，哪怕源代码都编过去了，设备上也不可能得到可用的虚拟化框架。
 
-### 54.25.2 `Microdroid` 镜像构建
+### 54.24.2 `Microdroid` 镜像构建
 
 `Microdroid` 不是普通系统镜像复制过来，而是专门的构建产物链。镜像内容、签名、版本和 APEX 内部引用必须一致。
 
-### 54.25.3 `pvmfw` 构建
+### 54.24.3 `pvmfw` 构建
 
 `pvmfw` 构建通常伴随 Rust feature 和不同目标配置。因为它直接进入受信启动链，所以构建参数本身就是安全语义的一部分。
 
-### 54.25.4 Product 配置
+### 54.24.4 Product 配置
 
 产品侧必须显式开启相关包、属性和能力，必要时还要打开 vendor 支持、设备分配或远程证明功能。AVF 从来不是“内核支持了就自动有”。
 
-## 54.26 Feature Flags and Conditional Compilation
+## 54.25 Feature Flags and Conditional Compilation
 
-### 54.26.1 `pvmfw` 的 Cargo feature
+### 54.25.1 `pvmfw` 的 Cargo feature
 
 `pvmfw` 用 Rust `cfg` 和 Cargo feature 控制实例镜像回滚保护、旧版 DICE handover 兼容、debuggable VM 增强以及新旧 DICE 行为差异。这是早期启动代码保持“同一套源码支持多代平台”的关键机制。
 
-### 54.26.2 `vm` CLI 的构建期开关
+### 54.25.2 `vm` CLI 的构建期开关
 
 `vm` 工具会按 feature 决定是否暴露网络、vendor 模块、设备分配、TEE allowlist、`earlycon` 和 host service 等参数。也就是说，命令行选项本身就是构建产物的一部分。
 
-### 54.26.3 `VirtualizationService` 的特性开关
+### 54.25.3 `VirtualizationService` 的特性开关
 
 服务端也会按 `cfg` 控制某些功能，例如 LLPVM 维护服务。上层 API 是否注册、系统里是否真的存在该服务，都依赖编译期开关。
 
-### 54.26.4 `crosvm` 的特性开关
+### 54.25.4 `crosvm` 的特性开关
 
 `crosvm` 大量使用 Cargo feature 控制磁盘格式、GPU、网络、音频、balloon、热插拔和加固分配器。Android 通常只保留移动设备需要的部分，并启用更硬化的默认值。
 
-## 54.27 Comparison with Other Virtualization Solutions
+## 54.26 Comparison with Other Virtualization Solutions
 
-### 54.27.1 AVF 与传统 hypervisor 对比
+### 54.26.1 AVF 与传统 hypervisor 对比
 
 和 Xen 这类典型 Type-1 hypervisor 相比，AVF / `pKVM` 的目标不是托管大量通用 VM，而是在移动设备上用更小 TCB 提供机密计算；和 QEMU/KVM 这类 Type-2 方案相比，AVF 更强调宿主对受保护 VM 的“不可信”假设，以及 DICE、`pvmfw`、受控设备模型这些安全设计。
 
-### 54.27.2 AVF 与 ARM CCA 对比
+### 54.26.2 AVF 与 ARM CCA 对比
 
 ARM CCA 提供 Realm 机制，方向上与 pVM 很接近。AVF / `pKVM` 可以看成是在现有 Android 设备与软件栈约束下先落地的一套受保护执行框架；未来在具备 CCA 的硬件上，它与 Realm 模型存在汇合空间。
 
-## 54.28 Try It
+## 54.27 动手实践
 
-### 54.28.1 检查设备支持
+### 54.27.1 检查设备支持
 
 先确认设备是否具备 AVF 的基本条件：
 
@@ -811,7 +859,7 @@ adb shell ls -l /dev/kvm
 adb shell /apex/com.android.virt/bin/vm info
 ```
 
-### 54.28.2 运行一个 `Microdroid` VM
+### 54.27.2 运行一个 `Microdroid` VM
 
 最基础的启动实验如下：
 
@@ -825,7 +873,7 @@ adb shell /apex/com.android.virt/bin/vm run-microdroid --protected
 
 如果设备不支持 `pKVM`，第二条命令不会成功，这是预期行为。
 
-### 54.28.3 构建一个 Payload App
+### 54.27.3 构建一个 Payload App
 
 AVF 的价值不在“空 VM 能起来”，而在 payload 能作为可信工作负载运行。典型流程是：
 
@@ -834,15 +882,15 @@ AVF 的价值不在“空 VM 能起来”，而在 payload 能作为可信工作
 3. 通过 `vm` 或 Java API 启动。
 4. 观察宿主与来宾回调。
 
-### 54.28.4 Java API 用法
+### 54.27.4 Java API 用法
 
 应用或系统组件可以通过 framework virtualization API 创建 VM 配置、订阅状态并控制生命周期。阅读 `packages/modules/Virtualization/libs/framework-virtualization/` 是理解 Java 侧契约的最佳入口。
 
-### 54.28.5 运行测试
+### 54.27.5 运行测试
 
 原文列出了 `Microdroid` host test、app test 以及 DICE 有效性验证命令。建议先在 non-protected 模式跑通测试基线，再迁移到带 `pKVM` 的设备验证 protected 路径。
 
-### 54.28.6 调试 VM
+### 54.27.6 调试 VM
 
 常见调试方式包括：
 
@@ -851,19 +899,19 @@ AVF 的价值不在“空 VM 能起来”，而在 payload 能作为可信工作
 - 启动 GDB server 调试来宾
 - 导出来宾设备树做离线检查
 
-### 54.28.7 自定义 VM 配置
+### 54.27.7 自定义 VM 配置
 
 可以逐步加入自定义内核、initrd、CPU 数、内存大小、调试策略和设备分配项，观察 `VirtualizationService` 与 `crosvm` 如何折算这些配置。
 
-### 54.28.8 检查 AVF 组件
+### 54.27.8 检查 AVF 组件
 
 建议直接查看 APEX 内容、`pvmfw.bin`、`Microdroid` 镜像与 `vm` 二进制，建立“哪些东西实际上被打包进来”的直觉。
 
-### 54.28.9 从源码构建 AVF
+### 54.27.9 从源码构建 AVF
 
 开发时通常会只单独构建 `com.android.virt` APEX，加快迭代；而验证与平台兼容性问题时，再回到整机构建。
 
-### 54.28.10 常见故障排查
+### 54.27.10 常见故障排查
 
 排查顺序建议固定为：
 
@@ -873,11 +921,11 @@ AVF 的价值不在“空 VM 能起来”，而在 payload 能作为可信工作
 4. 再看 `logcat`、tombstone 和控制台输出。
 5. 最后才怀疑 guest 内核或 payload。
 
-### 54.28.11 远程证明演示
+### 54.27.11 远程证明演示
 
 远程证明实验通常需要配套服务端或测试工具链。重点不是把证书打印出来，而是核对 DICE 链、challenge、叶子证书扩展和 VM component 描述是否符合预期。
 
-## Summary
+## 小结
 
 AVF 是 Android 安全架构的一次明显升级：它把“应用沙箱之外的硬件级隔离执行环境”做成了可更新、可证明、可调度、可构建的一整套平台能力。
 

@@ -1287,7 +1287,7 @@ Profiling 模块并没有替代 Perfetto / simpleperf / heapprofd，而是把它
 | `TracingSession` | `packages/modules/Profiling/service/java/com/android/os/profiling/TracingSession.java` |
 | `IProfilingService.aidl` | `packages/modules/Profiling/aidl/android/os/IProfilingService.aidl` |
 
-## 56.19 Try It: Debug a Real Performance Issue
+## 56.19 动手实践：调试真实性能问题
 
 ### 56.19.1 问题描述
 
@@ -1380,7 +1380,7 @@ adb shell perfetto -o /data/misc/perfetto-traces/jank_fixed.pftrace -t 15s sched
 - 把时间线和调用热点对上。
 - 修复后一定要重新采集同类证据，而不是凭感觉宣布完成。
 
-## Summary
+## 小结
 
 Android 的调试与分析体系并不是一堆彼此无关的小工具，而是一套跨日志、trace、性能、服务状态、崩溃现场和系统快照的完整取证链。
 

@@ -502,9 +502,7 @@ Shell 需要监控 transition 时长、布局开销和 surface transaction 复�
 - SurfaceControl 负责最终表面操作
 - Input 与 Insets 是窗口系统的并行集成子系统
 
-## Summary
-
-## 总结
+## 小结
 
 Android 窗口系统的核心架构可概括为：
 
@@ -515,11 +513,11 @@ Android 窗口系统的核心架构可概括为：
 | Surface | `SurfaceControl`, leash, transaction, BLAST sync |
 | Input/Insets | `InputMonitor`, input channel, insets state |
 
-### Architecture Recap
+### 架构回顾
 
 窗口系统围绕“容器树 + 事务提交 + 高层 shell 组织者”展开，是 Activity 系统、输入系统、动画系统和显示系统的交汇点。
 
-### Key Design Patterns
+### 关键设计模式
 
 1. **容器树模式**：所有窗口与任务状态统一纳入树结构。
 2. **Leash 模式**：动画通过中间容器而不是直接作用原表面。
@@ -527,10 +525,10 @@ Android 窗口系统的核心架构可概括为：
 4. **Core/Shell 分层**：稳定核心与快速演进特性分离。
 5. **Policy/Organizer 模式**：通过策略与组织者实现高层可定制行为。
 
-### Scale of the System
+### 系统规模
 
 窗口系统的复杂度来自多显示、多窗口、动画、输入、Insets、Shell 功能和 system_server 核心逻辑的深度耦合。
 
-### Evolution Direction
+### 演进方向
 
 Android 窗口系统正持续向更模块化、更 shell 化、更适合大屏/桌面/折叠设备和更强过渡系统的方向演进。

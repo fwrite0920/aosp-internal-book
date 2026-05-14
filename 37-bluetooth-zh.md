@@ -204,6 +204,18 @@ GD 不是一个单独“替换旧栈”的大开关，而是一组逐步接管�
 
 它的设计强调模块清晰、依赖显式和更强的测试可控性。
 
+#### GD HAL 模块
+
+GD HAL 模块连接蓝牙控制器 HAL 和 GD stack。
+
+#### GD HCI 模块
+
+GD HCI 模块处理 host/controller command、event 与 ACL 数据流。
+
+#### GD 存储模块
+
+GD Storage 模块负责蓝牙配置、配对和持久化状态。
+
 ### 37.2.4 Rust 组件
 
 Android 蓝牙开始在部分模块引入 Rust，最主要的目标是提高内存安全。Rust 组件通常通过 FFI 与现有 C++ 栈协同，而不是一次性彻底替换所有原生代码。
@@ -284,6 +296,14 @@ A2DP 是经典蓝牙音频流分发 profile，负责高质量音频从 source �
 - codec 协商
 - 音频 HAL 配合
 
+#### A2DP 状态机
+
+A2DP 状态机管理连接、配置、启动、暂停和断开。
+
+#### A2DP 协议栈
+
+A2DP 协议栈包含 profile、AVDTP、L2CAP 与 codec 配置。
+
 ### 37.3.3 HFP
 
 HFP 用于通话音频和免提控制。它与电话栈和音频路由结合紧密，常见职责包括：
@@ -292,6 +312,10 @@ HFP 用于通话音频和免提控制。它与电话栈和音频路由结合紧�
 - SCO 音频链路
 - 按键控制
 - 设备侧 AG / HF 角色协同
+
+#### HFP 音频 Codec
+
+HFP 音频 codec 决定 SCO/eSCO 语音链路质量与兼容性。
 
 ### 37.3.4 AVRCP
 
@@ -317,6 +341,10 @@ HID 用于键盘、鼠标、游戏手柄等输入设备，常见于：
 
 PAN 提供蓝牙网络共享和个人网络能力。它会与网络栈、tethering 或局域网桥接逻辑发生交互。
 
+#### PAN 协议栈
+
+PAN 协议栈把蓝牙链路映射为个人区域网络连接。
+
 ### 37.3.8 核心协议栈
 
 许多 profile 最终都建立在下层协议之上，例如：
@@ -328,6 +356,12 @@ PAN 提供蓝牙网络共享和个人网络能力。它会与网络栈、tetheri
 - AVDTP
 
 理解 profile 时，必须把它们和这些下层协议放在一起看。
+
+#### L2CAP（逻辑链路控制与适配协议）
+
+#### 蓝牙协议：RFCOMM
+
+#### 服务发现协议（SDP）
 
 ### 37.3.9 GATT
 
@@ -532,6 +566,12 @@ BLE 的安全主要依赖 SMP（Security Manager Protocol）。它负责：
 - 身份与加密参数协商
 - 密钥分发
 
+#### 配对关联模型
+
+#### SMP 状态机
+
+#### SMP 命令（OTA Opcode）
+
 ### 37.6.3 Secure Connections 配对流程
 
 Secure Connections 是更现代、更安全的配对方式。它依赖更强的椭圆曲线机制来完成密钥协商。
@@ -651,6 +691,7 @@ Android 常见的 A2DP codec 包括：
 
 ### 37.7.4 codec 协商流程
 
+
 ```mermaid
 sequenceDiagram
     participant SRC as Android Source
@@ -697,6 +738,8 @@ LE Audio 带来的核心变化包括：
 
 ### 37.7.9 HFP 音频
 
+#### 语音场景中的 SCO 与 ISO
+
 HFP 音频通常依赖 SCO 链路，和媒体 A2DP 路径完全不同。这也是“通话蓝牙”和“媒体蓝牙”经常表现出不同行为和延迟特性的原因。
 
 ### 37.7.10 音频时延与质量
@@ -716,9 +759,9 @@ Android 的 A2DP / LE Audio 架构需要允许厂商 codec 和未来标准 codec
 
 ---
 
-## 37.8 附录：关键源码路径与延伸阅读
+关键源码路径与延伸阅读：
 
-### 37.8.1 关键源码路径
+关键源码路径：
 
 | 组件 | 路径 |
 |---|---|
@@ -747,7 +790,7 @@ Android 的 A2DP / LE Audio 架构需要允许厂商 codec 和未来标准 codec
 | Floss | `packages/modules/Bluetooth/floss/` |
 | Pandora 测试框架 | `packages/modules/Bluetooth/pandora/` |
 
-### 37.8.2 继续阅读
+继续阅读：
 
 若要继续深入，可优先阅读：
 
@@ -765,9 +808,9 @@ Android 的 A2DP / LE Audio 架构需要允许厂商 codec 和未来标准 codec
 
 ---
 
-## 37.9 动手实践（Try It）
+## 37.8 动手实践
 
-### 37.9.1 用 ADB 查看蓝牙状态
+### 37.8.1 用 ADB 查看蓝牙状态
 
 ```bash
 adb shell settings get global bluetooth_on
@@ -776,7 +819,7 @@ adb shell dumpsys bluetooth_manager
 adb shell dumpsys bluetooth_manager --proto-bin
 ```
 
-### 37.9.2 抓取 HCI 日志
+### 37.8.2 抓取 HCI 日志
 
 ```bash
 adb shell setprop persist.bluetooth.btsnooplogmode full
@@ -787,7 +830,7 @@ adb pull /data/misc/bluetooth/logs/btsnoop_hci.log
 
 导出后可用 Wireshark 打开分析。
 
-### 37.9.3 查看已绑定设备
+### 37.8.3 查看已绑定设备
 
 ```bash
 adb root
@@ -795,7 +838,7 @@ adb shell cat /data/misc/bluedroid/bt_config.conf
 adb shell grep '^\[.*:.*:.*\]' /data/misc/bluedroid/bt_config.conf
 ```
 
-### 37.9.4 观察 profile 连接
+### 37.8.4 观察 profile 连接
 
 ```bash
 adb shell dumpsys bluetooth_manager
@@ -804,7 +847,7 @@ adb shell dumpsys activity service com.android.bluetooth | grep -i Headset
 adb shell dumpsys activity service com.android.bluetooth | grep -i Gatt
 ```
 
-### 37.9.5 观察 BLE 扫描
+### 37.8.5 观察 BLE 扫描
 
 ```bash
 adb logcat | grep -E "BluetoothLeScanner|GattService|ScanManager"
@@ -812,7 +855,7 @@ adb logcat | grep -E "BluetoothLeScanner|GattService|ScanManager"
 
 如果设备允许，还可以结合内部调试命令或测试应用观察扫描结果和过滤器命中。
 
-### 37.9.6 监控蓝牙事件
+### 37.8.6 监控蓝牙事件
 
 ```bash
 adb logcat -s BluetoothAdapter BluetoothManagerService AdapterService
@@ -820,7 +863,7 @@ adb logcat -s smp bt_btif_dm bt_smp
 adb logcat -s A2dpService HeadsetService GattService
 ```
 
-### 37.9.7 构建与测试蓝牙改动
+### 37.8.7 构建与测试蓝牙改动
 
 ```bash
 m com.android.bt
@@ -829,7 +872,7 @@ atest BluetoothInstrumentationTests
 atest BluetoothUnitTests
 ```
 
-### 37.9.8 使用蓝牙 shell 命令
+### 37.8.8 使用蓝牙 shell 命令
 
 ```bash
 adb shell cmd bluetooth_manager help
@@ -837,7 +880,7 @@ adb shell cmd bluetooth_manager help
 
 不同分支和设备可用子命令不同，但这是查看 manager 侧控制入口的第一步。
 
-### 37.9.9 分析 A2DP codec 配置
+### 37.8.9 分析 A2DP codec 配置
 
 ```bash
 adb shell getprop | grep -i a2dp
@@ -850,7 +893,7 @@ adb shell dumpsys activity service com.android.bluetooth | grep -i codec
 - offload 是否启用
 - source / sink profile 是否打开
 
-### 37.9.10 编写一个简单 BLE 扫描器
+### 37.8.10 编写一个简单 BLE 扫描器
 
 ```java
 BluetoothLeScanner scanner =
@@ -875,7 +918,7 @@ scanner.startScan(
         });
 ```
 
-### 37.9.11 编写一个最小 GATT Server
+### 37.8.11 编写一个最小 GATT Server
 
 ```java
 BluetoothManager btManager =
@@ -900,11 +943,11 @@ service.addCharacteristic(characteristic);
 gattServer.addService(service);
 ```
 
-### 37.9.12 试用 Pandora
+### 37.8.12 试用 Pandora
 
 Pandora 位于 `packages/modules/Bluetooth/pandora/`，适合做自动化蓝牙测试、配对控制和 profile 行为验证。
 
-### 37.9.13 全栈追踪
+### 37.8.13 全栈追踪
 
 ```bash
 adb shell setprop log.tag.BluetoothAdapter VERBOSE
@@ -916,7 +959,7 @@ adb shell setprop persist.bluetooth.btsnooplogmode full
 adb logcat -b all > bluetooth_trace.log
 ```
 
-### 37.9.14 理解蓝牙配置文件
+### 37.8.14 理解蓝牙配置文件
 
 ```bash
 adb root
@@ -981,7 +1024,7 @@ atest --host bluetooth_test_gd -- --rootcanal
 
 ---
 
-## Summary
+## 小结
 
 - Android 蓝牙栈是一个跨 Java、Kotlin、C++、Rust、AIDL HAL 和控制器固件的多层系统，既要支持经典蓝牙，也要支持 BLE 和 LE Audio。
 - `BluetoothManager` 与 `BluetoothAdapter` 是 framework 入口，`BluetoothManagerService` 与 `AdapterService` 负责系统服务和蓝牙 APK 进程内的核心协调。

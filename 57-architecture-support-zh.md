@@ -406,7 +406,7 @@ ARM32 历史上在 soft float、NEON 和 ABI 之间存在复杂兼容关系，�
 
 ARM32 还保留一些与 LPAE 等历史平台特性相关的 workaround，体现出 Android 对旧架构的兼容深度。
 
-## 57.9 Try It
+## 57.9 动手实践
 
 ### 57.9.1 练习 1：检查设备的架构参数
 
@@ -521,7 +521,7 @@ ls frameworks/libs/binary_translation/
 
 这个练习就是把本章 `57.6` 的分层模型还原成真实构建命令。原文这里误写成了 `28.6`，中文稿已按本章编号修正。
 
-## Summary
+## 小结
 
 Android 的架构支持，本质上是构建系统、C library、运行时和设备配置共同参与的分层系统。
 

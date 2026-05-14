@@ -568,7 +568,16 @@ adb shell am force-stop com.android.launcher3
 
 折叠屏和平板可进一步定义 two-panel portrait / landscape 相关 profile，使不同姿态下拥有独立网格。
 
-## Summary
+### 48.10.10 Key Files Reference
+
+| 文件 | 作用 |
+|------|------|
+| `InvariantDeviceProfile.java` | 网格不变量配置 |
+| `DeviceProfile.java` | 运行时设备布局指标 |
+| `CellLayout.java` | 桌面网格容器 |
+| `Workspace.java` | 主屏页面集合 |
+
+## 小结
 
 Launcher3 是 Android 主屏体验的中心应用，也是一个典型的“大型交互式系统 app”：它一边要维持低延迟、强动画和复杂拖放，一边又要承接 widgets、recents、taskbar、主题和搜索等多条系统级功能链。
 

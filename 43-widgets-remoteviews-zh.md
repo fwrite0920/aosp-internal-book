@@ -811,7 +811,7 @@ adb shell dumpsys meminfo com.example.widget
 4. RemoteCompose 不显示：检查 host 是否在 `mHasDrawInstructions` 时正确切换到 `RemoteComposePlayer`。
 5. 交互指标没采集：检查 feature flag 和 `setAppWidgetEventTag()` 调用时机。
 
-## Summary
+## 小结
 
 Android widget 体系的本质，是一套把 provider 侧 UI 描述安全地投递到 host 进程执行的多层架构。Provider 通过 `AppWidgetProvider` 和 `AppWidgetManager` 生产 `RemoteViews`，system_server 中的 `AppWidgetServiceImpl` 负责调度、持久化与安全仲裁，host 侧的 `AppWidgetHost` / `AppWidgetHostView` 再把这些远程描述落地成实际界面。新出现的 RemoteCompose 则进一步把“跨进程 UI 表达”从 XML + setter 模式推进到二进制文档 + 绘制操作模式。
 
@@ -856,6 +856,8 @@ flowchart TB
 - 通知系统也是 `RemoteViews` 的重要宿主之一，因此很多 widget 约束同样适用于通知。
 - RemoteCompose 是新一代远程渲染机制，表达能力明显超出传统 XML + setter 模型。
 - Launcher3 在 framework 之上叠加了大量 widget 专用逻辑，因此真实用户体验高度依赖宿主实现。
+
+### 关键源码路径
 
 适合继续深入阅读的源码路径：
 

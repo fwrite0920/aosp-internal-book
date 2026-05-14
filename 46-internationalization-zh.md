@@ -482,7 +482,7 @@ adb pull /data/misc/perfetto-traces/trace.pftrace .
 
 对设备厂商来说，可以通过覆盖 `fonts.xml` 和复制字体文件来定制系统字体栈。例如在产品配置里加入自定义 sans-serif family，并把字体拷贝到 `system/fonts/`。
 
-## Summary
+## 小结
 
 Android 国际化体系的核心，在于把 Unicode 规则、locale 偏好、资源选择、布局方向、文本 shaping 和字体回退串成了一条完整的系统级管线。应用开发者表面上只是在调用 `DateFormat`、写 `values-zh/strings.xml` 或给 `TextView` 设置文本，但底层已经经过 ICU、Configuration、Resources、Minikin、HarfBuzz、FreeType 和 Skia 的多层协同。
 
@@ -495,7 +495,7 @@ Android 国际化体系的核心，在于把 Unicode 规则、locale 偏好、�
 - 文本渲染是一条深管线：BiDi 分析、script 分段、字体选择、HarfBuzz shaping、glyph 定位、断行、栅格化缺一不可。
 - 字体系统通过 `fonts.xml`、family、fallback 链、CJK 策略和可下载字体共同保证全球文本可显示。
 
-### 关键源码路径
+## 关键源码文件参考
 
 | 组件 | 路径 |
 |---|---|

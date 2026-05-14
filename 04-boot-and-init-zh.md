@@ -173,7 +173,7 @@ typedef enum {
 
 生产设备通常使用 `RESTART_AND_INVALIDATE`。一旦 dm-verity 检测到损坏，设备会重启，并将当前 A/B slot 标记为失效，从而回退到另一槽位。`LOGGING` 模式则只适用于显式允许验证失败的开发环境。
 
-#### Rollback 保护
+#### 回滚保护
 
 Rollback protection 防止攻击者刷回已知存在漏洞的旧版本系统。其机制如下：
 
@@ -782,7 +782,7 @@ Parser CreateParser(ActionManager& action_manager, ServiceList& service_list) {
 }
 ```
 
-#### Action 队列与 Trigger 顺序（第 1205-1243 行）
+#### 动作队列与触发器顺序（第 1205-1243 行）
 
 当脚本加载完成后，init 会把整条启动 trigger 链塞进队列：
 
@@ -960,7 +960,7 @@ import /system/etc/init/hw/init.${ro.zygote}.rc
 
 这里使用了 property expansion：`${ro.hardware}` 会被替换为设备硬件名，而 `${ro.zygote}` 会决定当前采用哪个 Zygote 配置，即 32 位、64 位还是双 Zygote。
 
-#### Action 与 Trigger
+#### 动作与触发器
 
 Action 的基本形式是：
 
@@ -1091,7 +1091,7 @@ on zygote-start
 
 这里通过 `wait_for_prop` 把 Zygote 启动卡在 `odsign.verification.done=1` 之后，确保 ART 将要使用的产物已经完成验证。
 
-#### Property Trigger
+#### 属性触发器
 
 Action 也可以由 property 变化触发：
 
@@ -1103,7 +1103,7 @@ on property:sys.boot_completed=1 && property:ro.config.batteryless=true
 
 当某个 property 变化后，init 会重新评估相关 property trigger。如果表达式匹配，就执行该 action。复合 trigger 中的所有条件都必须同时满足。
 
-#### Service 定义
+#### 服务定义
 
 Service 是 init 管理的常驻进程。以下是主要 Zygote 服务定义，来自 `system/core/rootdir/init.zygote64.rc`：
 
@@ -1970,7 +1970,7 @@ gantt
 
 ---
 
-## 4.6 Try It: Add a Custom Init Service
+## 4.6 动手实践：添加自定义 Init 服务
 
 下面做一个实操练习：添加一个在启动时拉起的自定义 native daemon。
 
@@ -3141,7 +3141,7 @@ flowchart TD
 
 ---
 
-## Summary
+## 小结
 
 本章完整追踪了 Android 从上电到主屏的启动链：
 
@@ -3161,7 +3161,7 @@ flowchart TD
 - **system_server 的 boot phase progression** 让服务可以按依赖层次做分阶段初始化
 - **property system** 既是配置中心，也是启动期间的重要协调机制
 
-### Key Source File Reference
+### 关键源码文件参考
 
 | 文件路径 | 用途 | 对应小节 |
 |---|---|---|
@@ -3181,7 +3181,7 @@ flowchart TD
 | `external/avb/libavb/avb_slot_verify.h` | Slot 验证 API | 4.2.3 |
 | `external/avb/libavb/avb_hashtree_descriptor.h` | dm-verity hashtree 格式 | 4.2.3 |
 
-### Architectural Insights
+### 架构洞察
 
 Android 启动链呈现出几个非常鲜明的设计原则：
 
@@ -3203,7 +3203,7 @@ Android 启动链呈现出几个非常鲜明的设计原则：
 - Property system 对全部配置变更执行 MAC
 - 服务以最小特权运行，只保留必要 user / group / capabilities
 
-### Glossary of Terms
+### 术语表
 
 | 术语 | 定义 |
 |---|---|
@@ -3227,10 +3227,9 @@ Android 启动链呈现出几个非常鲜明的设计原则：
 | **Zygote** | 预加载 framework 并 fork 出全部 app 进程的核心进程 |
 | **system_server** | 承载 100+ 系统服务的 framework 核心进程 |
 
-### Further Reading
+### 延伸阅读
 
 - 本书后续关于进程管理的章节，会继续讲解 Zygote fork 出的 app 进程如何被 AMS 管理
 - 后续 Binder 章节，会补上 system_server 与 app 之间 IPC 的完整机制
 - `system/core/init/README.md` 中包含更多 init.rc 语言文档
 - `external/avb/README.md` 更详细地记录了 AVB 协议和工具
-

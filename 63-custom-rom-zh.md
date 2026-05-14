@@ -1365,7 +1365,7 @@ device/AospBook/bookphone/
         +-- BookSystemService.java
 ```
 
-### 63.13.7 延伸阅读索引
+## 63.14 Further Reading
 
 | 主题 | 源码位置 | 说明 |
 |------|----------|------|
@@ -1383,7 +1383,7 @@ device/AospBook/bookphone/
 | Init | `system/core/init/` | init 进程源码 |
 | SystemServer | `frameworks/base/services/java/com/android/server/SystemServer.java` | 系统服务启动主线 |
 
-## 63.14 Summary
+## 63.15 Summary
 
 本章把一套完整 Custom ROM 的关键工程面串了起来：
 

@@ -1415,9 +1415,209 @@ sequenceDiagram
 
 ---
 
-## 36.11 附录：完整链路、目录结构与术语
+## 36.11 动手实践
 
-### 36.11.1 从拨号到 modem 的完整路径
+### 练习 36-1：查看电话服务状态
+
+```bash
+adb shell dumpsys telephony.registry
+adb shell dumpsys telephony.registry | grep -A5 "mCallState"
+adb shell dumpsys telephony.registry | grep -A10 "mServiceState"
+adb shell dumpsys telephony.registry | grep "mSignalStrength"
+```
+
+### 练习 36-2：观察 RIL 日志
+
+```bash
+adb logcat -b radio -s RILJ:V
+adb logcat -b radio | grep -E "RILJ|RIL_REQUEST|RIL_UNSOL"
+adb shell settings put global airplane_mode_on 1
+adb shell am broadcast -a android.intent.action.AIRPLANE --ez state true
+adb shell settings put global airplane_mode_on 0
+adb shell am broadcast -a android.intent.action.AIRPLANE --ez state false
+```
+
+切飞行模式时，通常能看到 `setRadioPower()`、`radioStateChanged()` 一类日志。
+
+### 练习 36-3：用 shell 命令查询电话状态
+
+```bash
+adb shell service call iphonesubinfo 1
+adb shell cmd phone help
+adb shell cmd phone get-carrier-config-value -s 0 KEY_CARRIER_VOLTE_AVAILABLE_BOOL
+adb shell cmd phone ims get-ims-registration -s 0
+```
+
+不同版本设备的 `cmd phone` 子命令可能略有差异，但主线都是围绕 carrier config、IMS、数据和 SIM。
+
+### 练习 36-4：检查 SIM 与订阅状态
+
+```bash
+adb shell getprop | grep -i sim
+adb shell dumpsys activity service com.android.phone | grep -i Uicc
+adb shell cmd phone subscription-list
+```
+
+### 练习 36-5：跟踪数据建链
+
+```bash
+adb logcat -b radio | grep -E "DataNetworkController|DataNetwork|setupDataCall"
+adb shell svc data disable
+adb shell svc data enable
+```
+
+预期可以看到：
+
+- `onAddNetworkRequest`
+- `evaluateDataSetup`
+- `DataNetwork created`
+- `setupDataCall`
+- `createNetworkAgent`
+
+### 练习 36-6：阅读 AIDL HAL 定义
+
+```bash
+Get-ChildItem -Path hardware\\interfaces\\radio\\aidl\\android\\hardware\\radio -Recurse -Filter *.aidl
+Select-String -Path hardware\\interfaces\\radio\\aidl\\android\\hardware\\radio\\voice\\IRadioVoice.aidl -Pattern '^\\s*void '
+Select-String -Path hardware\\interfaces\\radio\\aidl\\android\\hardware\\radio\\data\\IRadioData.aidl -Pattern '^\\s*void '
+```
+
+### 练习 36-7：模拟短信与网络变化
+
+模拟器可使用 console 发送短信、调整网络速度和时延；真机更适合结合实际 SIM 与 carrier config 做观察。
+
+### 练习 36-8：观察 IMS 注册
+
+```bash
+adb shell cmd phone ims get-ims-registration -s 0
+adb logcat | grep -E "ImsResolver|ImsServiceController|ImsPhoneCallTracker|Rcs"
+adb shell svc wifi disable
+adb shell svc wifi enable
+```
+
+可用于观察 VoWiFi 与 LTE / IWLAN 注册切换。
+
+### 练习 36-9：观察 APN 与 carrier config
+
+```bash
+adb shell content query --uri content://telephony/carriers
+adb shell cmd phone carrier_config get-values -s 0
+adb shell dumpsys activity service com.android.phone | grep -i "DataProfileManager"
+```
+
+### 练习 36-10：跟踪紧急号码与多 SIM
+
+```bash
+adb shell cmd phone emergency-number-test-mode
+adb shell cmd phone subscription-list
+adb shell dumpsys activity service com.android.phone | grep -i PhoneSwitcher
+```
+
+### 练习 36-11：构建并运行 Telephony 单元测试
+
+```bash
+atest FrameworksTelephonyTests
+atest TelephonyCommonTests
+atest FrameworksTelephonyTests:com.android.internal.telephony.RILTest
+```
+
+电话栈测试大量依赖 `MockModem` 与 Mockito 替代真实硬件。
+
+### 练习 36-12：完整排障建议
+
+面对电话问题时，建议按层排：
+
+1. 先看 `TelephonyManager` / `dumpsys telephony.registry` 暴露出的状态。
+2. 再看 `com.android.phone` 侧日志与 `PhoneInterfaceManager` / `Phone` 内部状态。
+3. 接着看 `RILJ`、radio buffer 和 vendor HAL 日志。
+4. 最后结合 carrier config、IMS、APN、subscription 与 modem 行为定位。
+
+---
+
+### 练习 36-13：测试紧急号码识别
+
+检查紧急号码识别时，应同时看 carrier config、国家码、SIM 状态和 `EmergencyNumberTracker` 输出。
+
+### 练习 36-14：探索多 SIM 配置
+
+使用 `cmd phone subscription-list`、`dumpsys isub` 和 `PhoneSwitcher` 日志观察默认语音、短信、数据订阅如何变化。
+
+### 练习 36-15：追踪 IMS 注册
+
+结合 `cmd phone ims get-ims-registration`、IMS service 日志和 Wi-Fi/LTE 切换观察注册状态。
+
+### 练习 36-16：分析信号强度
+
+通过 `dumpsys telephony.registry` 和 radio log 对照 RSSI、RSRP、RSRQ、SINR 等字段。
+
+### 练习 36-17：检查 Carrier Config 键
+
+用 `cmd phone carrier_config get-values -s <subId>` 查看影响 VoLTE、VoWiFi、APN 和 IMS 的 carrier key。
+
+### 练习 36-18：导出完整电话状态
+
+抓取 `dumpsys activity service com.android.phone`、`dumpsys telephony.registry`、radio buffer 和 subscription 状态，形成完整现场。
+
+### 练习 36-19：结合 Vendor 日志观察 Radio HAL
+
+在 vendor 支持的设备上结合 radio buffer、HAL 日志和 modem 诊断日志观察 AIDL 请求与响应。
+
+### 练习 36-20：在模拟器中模拟网络变化
+
+模拟器可通过 console 或扩展工具调整网络类型、信号、短信和数据连接状态。
+
+### 练习 36-21：在代码中走读一次语音呼叫
+
+按 Dialer -> Telecom -> TelephonyConnectionService -> Phone -> RIL -> IRadioVoice 的顺序走读一次拨号。
+
+### 练习 36-22：理解数据建链决策树
+
+阅读 `DataNetworkController` 和 `DataEvaluation`，确认 APN、默认数据卡、网络请求、策略和失败重试如何共同决定建链。
+
+### 练习 36-23：构建并运行 Telephony 单元测试
+
+运行 `FrameworksTelephonyTests`、`TelephonyCommonTests` 和关键 RIL/DataNetwork 测试。
+
+### 练习 36-24：探索 Telephony Shell 命令
+
+执行 `adb shell cmd phone help`，按 IMS、carrier config、subscription、emergency 和调试子命令分类阅读。
+
+## 小结
+
+- Android 电话栈是典型的多层异步体系：SDK API、Binder 服务、`Phone` 对象、RIL、AIDL HAL 和 modem 分层清晰但强耦合。
+- `PhoneInterfaceManager` 是公开电话能力的权限和路由中枢，`PhoneFactory` 负责系统启动时装配整套 per-SIM 电话对象。
+- `RIL.java` 通过请求序列号、wakelock、death recipient 和直方图统计，把不可靠的 modem 通信封装成可恢复的异步接口。
+- UICC / subscription 体系把物理卡、逻辑 profile 与上层订阅模型解耦，是多 SIM、eSIM、MEP 的基础。
+- SMS / MMS、IMS、CarrierConfig、通话管理和移动数据并不是独立模块，它们都围绕 `Phone`、`RIL` 和 per-subscription 状态协同工作。
+- 新数据栈以 `DataNetworkController` 为核心，把 APN、QoS、keepalive、transport handover、5G slicing 和 auto data switch 纳入统一模型。
+- `ImsMedia` 和 WAP Push 说明电话栈不仅控制信令，还覆盖媒体面和富消息分发。
+- 电话问题排障必须同时看 framework 状态、RIL 日志、carrier config、subscription、IMS 注册和底层 HAL / modem 行为。
+
+### 架构要点
+
+| 文件 | 作用 |
+|---|---|
+| `frameworks/base/telephony/java/android/telephony/TelephonyManager.java` | 电话公开 API 入口 |
+| `packages/services/Telephony/src/com/android/phone/PhoneInterfaceManager.java` | `ITelephony` Binder 服务 |
+| `frameworks/opt/telephony/src/java/com/android/internal/telephony/Phone.java` | 内部电话抽象基类 |
+| `frameworks/opt/telephony/src/java/com/android/internal/telephony/GsmCdmaPhone.java` | CS 电话主实现 |
+| `frameworks/opt/telephony/src/java/com/android/internal/telephony/RIL.java` | Radio Interface Layer Java 实现 |
+| `frameworks/opt/telephony/src/java/com/android/internal/telephony/CommandsInterface.java` | framework 到 modem 的抽象边界 |
+| `frameworks/opt/telephony/src/java/com/android/internal/telephony/uicc/UiccController.java` | UICC / SIM 管理入口 |
+| `frameworks/opt/telephony/src/java/com/android/internal/telephony/subscription/SubscriptionManagerService.java` | 订阅管理 |
+| `frameworks/opt/telephony/src/java/com/android/internal/telephony/ims/ImsResolver.java` | ImsService 发现与绑定 |
+| `frameworks/opt/telephony/src/java/com/android/internal/telephony/data/DataNetworkController.java` | 移动数据中心控制器 |
+| `frameworks/opt/telephony/src/java/com/android/internal/telephony/data/DataNetwork.java` | 单个数据网络状态机 |
+| `packages/services/Telephony/src/com/android/phone/CarrierConfigLoader.java` | 运营商配置加载 |
+| `packages/services/Telephony/src/com/android/services/telephony/TelephonyConnectionService.java` | Telecom 到 Telephony 的桥 |
+| `hardware/interfaces/radio/aidl/android/hardware/radio/voice/IRadioVoice.aidl` | 语音 HAL |
+| `hardware/interfaces/radio/aidl/android/hardware/radio/data/IRadioData.aidl` | 数据 HAL |
+| `hardware/interfaces/radio/aidl/android/hardware/radio/sim/IRadioSim.aidl` | SIM HAL |
+| `hardware/interfaces/radio/aidl/android/hardware/radio/ims/IRadioIms.aidl` | IMS HAL |
+
+
+
+### 从拨号到 Modem 的完整 Telephony 流程
 
 下图总结一次语音呼叫从 Dialer 到 modem 的典型路径。
 
@@ -1443,7 +1643,7 @@ graph TD
     R --> S["19. Telecom / InCallUI 收到状态"]
 ```
 
-### 36.11.2 设计原则
+### 设计原则
 
 电话栈的设计特点可以概括为：
 
@@ -1453,7 +1653,11 @@ graph TD
 4. carrier extensibility：`CarrierConfigManager` 与 `CarrierService` 允许深度定制。
 5. HAL 稳定接口：AIDL + `@VintfStability` 使平台升级与 modem 迭代解耦。
 
-### 36.11.3 目录结构
+### 关键源码参考
+
+关键源码包括 `TelephonyManager`、`PhoneInterfaceManager`、`Phone`、`GsmCdmaPhone`、`RIL`、`CommandsInterface`、`UiccController`、`SubscriptionManagerService`、`ImsResolver`、`DataNetworkController` 和 Radio AIDL 接口。
+
+### 目录结构参考
 
 ```text
 frameworks/
@@ -1507,7 +1711,7 @@ hardware/
     ims/IRadioIms.aidl
 ```
 
-### 36.11.4 常用术语
+### 电话系统术语表
 
 | 术语 | 全称 | 含义 |
 |---|---|---|
@@ -1536,7 +1740,7 @@ hardware/
 | VoLTE | Voice over LTE | LTE 语音 |
 | VoWiFi | Voice over Wi-Fi | Wi-Fi Calling |
 
-### 36.11.5 继续阅读的起点
+### 延伸阅读
 
 若要继续深挖源码，比较有效的切入点包括：
 
@@ -1549,155 +1753,3 @@ hardware/
 - `IRadioData.aidl`、`IRadioVoice.aidl`
 
 ---
-
-## 36.12 动手实践（Try It）
-
-### 36.12.1 查看电话服务状态
-
-```bash
-adb shell dumpsys telephony.registry
-adb shell dumpsys telephony.registry | grep -A5 "mCallState"
-adb shell dumpsys telephony.registry | grep -A10 "mServiceState"
-adb shell dumpsys telephony.registry | grep "mSignalStrength"
-```
-
-### 36.12.2 观察 RIL 日志
-
-```bash
-adb logcat -b radio -s RILJ:V
-adb logcat -b radio | grep -E "RILJ|RIL_REQUEST|RIL_UNSOL"
-adb shell settings put global airplane_mode_on 1
-adb shell am broadcast -a android.intent.action.AIRPLANE --ez state true
-adb shell settings put global airplane_mode_on 0
-adb shell am broadcast -a android.intent.action.AIRPLANE --ez state false
-```
-
-切飞行模式时，通常能看到 `setRadioPower()`、`radioStateChanged()` 一类日志。
-
-### 36.12.3 用 shell 命令查询电话状态
-
-```bash
-adb shell service call iphonesubinfo 1
-adb shell cmd phone help
-adb shell cmd phone get-carrier-config-value -s 0 KEY_CARRIER_VOLTE_AVAILABLE_BOOL
-adb shell cmd phone ims get-ims-registration -s 0
-```
-
-不同版本设备的 `cmd phone` 子命令可能略有差异，但主线都是围绕 carrier config、IMS、数据和 SIM。
-
-### 36.12.4 检查 SIM 与订阅状态
-
-```bash
-adb shell getprop | grep -i sim
-adb shell dumpsys activity service com.android.phone | grep -i Uicc
-adb shell cmd phone subscription-list
-```
-
-### 36.12.5 跟踪数据建链
-
-```bash
-adb logcat -b radio | grep -E "DataNetworkController|DataNetwork|setupDataCall"
-adb shell svc data disable
-adb shell svc data enable
-```
-
-预期可以看到：
-
-- `onAddNetworkRequest`
-- `evaluateDataSetup`
-- `DataNetwork created`
-- `setupDataCall`
-- `createNetworkAgent`
-
-### 36.12.6 阅读 AIDL HAL 定义
-
-```bash
-Get-ChildItem -Path hardware\\interfaces\\radio\\aidl\\android\\hardware\\radio -Recurse -Filter *.aidl
-Select-String -Path hardware\\interfaces\\radio\\aidl\\android\\hardware\\radio\\voice\\IRadioVoice.aidl -Pattern '^\\s*void '
-Select-String -Path hardware\\interfaces\\radio\\aidl\\android\\hardware\\radio\\data\\IRadioData.aidl -Pattern '^\\s*void '
-```
-
-### 36.12.7 模拟短信与网络变化
-
-模拟器可使用 console 发送短信、调整网络速度和时延；真机更适合结合实际 SIM 与 carrier config 做观察。
-
-### 36.12.8 观察 IMS 注册
-
-```bash
-adb shell cmd phone ims get-ims-registration -s 0
-adb logcat | grep -E "ImsResolver|ImsServiceController|ImsPhoneCallTracker|Rcs"
-adb shell svc wifi disable
-adb shell svc wifi enable
-```
-
-可用于观察 VoWiFi 与 LTE / IWLAN 注册切换。
-
-### 36.12.9 观察 APN 与 carrier config
-
-```bash
-adb shell content query --uri content://telephony/carriers
-adb shell cmd phone carrier_config get-values -s 0
-adb shell dumpsys activity service com.android.phone | grep -i "DataProfileManager"
-```
-
-### 36.12.10 跟踪紧急号码与多 SIM
-
-```bash
-adb shell cmd phone emergency-number-test-mode
-adb shell cmd phone subscription-list
-adb shell dumpsys activity service com.android.phone | grep -i PhoneSwitcher
-```
-
-### 36.12.11 构建并运行 Telephony 单元测试
-
-```bash
-atest FrameworksTelephonyTests
-atest TelephonyCommonTests
-atest FrameworksTelephonyTests:com.android.internal.telephony.RILTest
-```
-
-电话栈测试大量依赖 `MockModem` 与 Mockito 替代真实硬件。
-
-### 36.12.12 完整排障建议
-
-面对电话问题时，建议按层排：
-
-1. 先看 `TelephonyManager` / `dumpsys telephony.registry` 暴露出的状态。
-2. 再看 `com.android.phone` 侧日志与 `PhoneInterfaceManager` / `Phone` 内部状态。
-3. 接着看 `RILJ`、radio buffer 和 vendor HAL 日志。
-4. 最后结合 carrier config、IMS、APN、subscription 与 modem 行为定位。
-
----
-
-## Summary
-
-- Android 电话栈是典型的多层异步体系：SDK API、Binder 服务、`Phone` 对象、RIL、AIDL HAL 和 modem 分层清晰但强耦合。
-- `PhoneInterfaceManager` 是公开电话能力的权限和路由中枢，`PhoneFactory` 负责系统启动时装配整套 per-SIM 电话对象。
-- `RIL.java` 通过请求序列号、wakelock、death recipient 和直方图统计，把不可靠的 modem 通信封装成可恢复的异步接口。
-- UICC / subscription 体系把物理卡、逻辑 profile 与上层订阅模型解耦，是多 SIM、eSIM、MEP 的基础。
-- SMS / MMS、IMS、CarrierConfig、通话管理和移动数据并不是独立模块，它们都围绕 `Phone`、`RIL` 和 per-subscription 状态协同工作。
-- 新数据栈以 `DataNetworkController` 为核心，把 APN、QoS、keepalive、transport handover、5G slicing 和 auto data switch 纳入统一模型。
-- `ImsMedia` 和 WAP Push 说明电话栈不仅控制信令，还覆盖媒体面和富消息分发。
-- 电话问题排障必须同时看 framework 状态、RIL 日志、carrier config、subscription、IMS 注册和底层 HAL / modem 行为。
-
-### 关键源码
-
-| 文件 | 作用 |
-|---|---|
-| `frameworks/base/telephony/java/android/telephony/TelephonyManager.java` | 电话公开 API 入口 |
-| `packages/services/Telephony/src/com/android/phone/PhoneInterfaceManager.java` | `ITelephony` Binder 服务 |
-| `frameworks/opt/telephony/src/java/com/android/internal/telephony/Phone.java` | 内部电话抽象基类 |
-| `frameworks/opt/telephony/src/java/com/android/internal/telephony/GsmCdmaPhone.java` | CS 电话主实现 |
-| `frameworks/opt/telephony/src/java/com/android/internal/telephony/RIL.java` | Radio Interface Layer Java 实现 |
-| `frameworks/opt/telephony/src/java/com/android/internal/telephony/CommandsInterface.java` | framework 到 modem 的抽象边界 |
-| `frameworks/opt/telephony/src/java/com/android/internal/telephony/uicc/UiccController.java` | UICC / SIM 管理入口 |
-| `frameworks/opt/telephony/src/java/com/android/internal/telephony/subscription/SubscriptionManagerService.java` | 订阅管理 |
-| `frameworks/opt/telephony/src/java/com/android/internal/telephony/ims/ImsResolver.java` | ImsService 发现与绑定 |
-| `frameworks/opt/telephony/src/java/com/android/internal/telephony/data/DataNetworkController.java` | 移动数据中心控制器 |
-| `frameworks/opt/telephony/src/java/com/android/internal/telephony/data/DataNetwork.java` | 单个数据网络状态机 |
-| `packages/services/Telephony/src/com/android/phone/CarrierConfigLoader.java` | 运营商配置加载 |
-| `packages/services/Telephony/src/com/android/services/telephony/TelephonyConnectionService.java` | Telecom 到 Telephony 的桥 |
-| `hardware/interfaces/radio/aidl/android/hardware/radio/voice/IRadioVoice.aidl` | 语音 HAL |
-| `hardware/interfaces/radio/aidl/android/hardware/radio/data/IRadioData.aidl` | 数据 HAL |
-| `hardware/interfaces/radio/aidl/android/hardware/radio/sim/IRadioSim.aidl` | SIM HAL |
-| `hardware/interfaces/radio/aidl/android/hardware/radio/ims/IRadioIms.aidl` | IMS HAL |

@@ -2,8 +2,6 @@
 
 `system_server` 是 Android framework 层最核心的 Java 进程。它承载大量系统服务，负责活动管理、窗口管理、包管理、电源管理、通知、显示、输入、备份、剪贴板、下载管理以及大量设备和形态相关服务。本章从 AOSP 源码视角梳理 `system_server` 的进程起源、服务生命周期、启动顺序、线程模型、Watchdog、APEX 模块化服务加载与一系列关键服务内部模式。
 
-## Overview
-
 `system_server` 的本质是一台系统级服务编排器。它出生于 Zygote，通过 `SystemServer.java` 进入主流程，按严格顺序启动 bootstrap、core、other 与 APEX 服务，并在整个系统生命周期内维持 Binder 服务、local service、线程、Watchdog、Boot Phase 与用户生命周期回调的一致性。
 
 ---
@@ -229,15 +227,15 @@ DropBox、Bugreport、Stats、Rollback、CrashRecovery 等。
 
 系统内部基础设施和通用管理器。
 
-#### Specialized
+#### 专用服务
 
 特定形态或 OEM 相关服务。
 
-#### Intelligence and ML
+#### 智能与机器学习
 
 智能和机器学习相关服务。
 
-#### Miscellaneous
+#### 其他服务
 
 其他系统基础服务。
 
@@ -328,7 +326,7 @@ Watchdog 会根据线程响应情况划分完成状态，如已完成、部分�
 
 ### 20.6.3 线程目录
 
-#### Main Looper Thread
+#### 主 Looper 线程
 
 主线程承载大量核心服务主 Handler 与 boot 流程。
 
@@ -391,172 +389,53 @@ Watchdog 会根据线程响应情况划分完成状态，如已完成、部分�
 
 ---
 
-## 20.7 动手实践
+## 20.7 深入解析：关键服务内部
 
-### 20.7.1 列出所有系统服务
-
-使用 `service list`、`dumpsys -l` 或 SystemServer dumper 查看系统服务目录。
-
-### 20.7.2 检查 `system_server` 进程
-
-```bash
-# Process ID
-# Thread count
-# Process status
-# Memory usage
-```
-
-### 20.7.3 `dumpsys` 命令
-
-```bash
-# Dump all services (very long!)
-# Dump a specific service
-# Dump the SystemServer dumper for internal state
-```
-
-### 20.7.4 检查 Boot Phases
-
-```bash
-# View boot timing events
-# View SystemServer timing tags
-# Full boot tracing with Perfetto
-```
-
-### 20.7.5 观察服务启动顺序
-
-```bash
-# Filter for service start messages
-# Look for specific boot phase transitions
-```
-
-### 20.7.6 Watchdog 诊断
-
-```bash
-# Dump Watchdog state
-# View Watchdog-related logs
-# Check for past Watchdog kills
-# View timeout history
-```
-
-### 20.7.7 线程检查
-
-```bash
-# List all system_server threads with names
-# View specific named threads
-# Get Java thread dump (sends SIGQUIT)
-# Then check /data/anr/ for the trace file
-```
-
-### 20.7.8 服务依赖与启动耗时
-
-```bash
-# View how long each service took to start
-# Check if a specific service is running
-# Call a service directly
-```
-
-### 20.7.9 检查 `SystemServiceManager` 状态
-
-```bash
-# Dump all registered system services
-```
-
-### 20.7.10 监控 Binder 线程池
-
-```bash
-# Check Binder thread usage
-# View Binder calls stats
-# View specific Binder transaction information
-```
-
-### 20.7.11 强制 Watchdog 超时（仅开发环境）
-
-```bash
-# Reduce watchdog timeout (settings must be available)
-# Or use the debug property
-```
-
-### 20.7.12 使用 Perfetto 追踪服务启动
-
-```bash
-# Record a boot trace
-# After reboot, pull the trace
-# Open in ui.perfetto.dev
-```
-
-### 20.7.13 模拟 Boot Phases
-
-```bash
-# Reboot and immediately start capturing
-```
-
-### 20.7.14 检查服务注册
-
-```bash
-# Check if a service exists and get its interface descriptor
-# Get service debug info (PID, interface)
-```
-
-### 20.7.15 监控 Looper 统计
-
-```bash
-# Dump looper statistics to see message processing times
-# This shows for each looper:
-# - Message count
-# - Total time
-# - Max time
-# - Exception count
-```
-
----
-
-## 20.8 深入解析：关键服务内部
-
-### 20.8.1 `ActivityManagerService` 与 `ActivityTaskManagerService`
+### 20.7.1 `ActivityManagerService` 与 `ActivityTaskManagerService`
 
 这两者负责进程、活动、任务栈和应用生命周期管理，是 `system_server` 最关键的服务之一。
 
-### 20.8.2 `WindowManagerService`
+### 20.7.2 `WindowManagerService`
 
 负责窗口层级、显示布局、动画、配置变化和输入窗口协调。
 
-### 20.8.3 `PackageManagerService`
+### 20.7.3 `PackageManagerService`
 
 负责包扫描、安装、卸载、权限解析、组件解析和包数据库维护。
 
-### 20.8.4 `PowerManagerService`
+### 20.7.4 `PowerManagerService`
 
 负责电源状态、唤醒锁、休眠/唤醒策略和与显示/热管理协同。
 
-### 20.8.5 `NotificationManagerService`
+### 20.7.5 `NotificationManagerService`
 
 负责通知生命周期、渠道、打断策略与 SystemUI 协作。
 
-### 20.8.6 `DisplayManagerService`
+### 20.7.6 `DisplayManagerService`
 
 负责显示设备管理、显示配置、亮度和多显示支持。
 
 ---
 
-## 20.9 服务通信模式
+## 20.8 服务通信模式
 
-### 20.9.1 Binder 服务 vs Local Services
+### 20.8.1 Binder 服务 vs Local Services
 
 Binder 服务用于跨进程；Local Services 用于 `system_server` 内部直接依赖注入和高效调用。
 
-### 20.9.2 `Lifecycle` 内部类模式
+### 20.8.2 `Lifecycle` 内部类模式
 
 许多服务使用 `Lifecycle` 内部类包装 `SystemService` 生命周期接口，使主服务实现与生命周期桥接分离。
 
-### 20.9.3 服务依赖
+### 20.8.3 服务依赖
 
 服务之间常通过 LocalServices、Binder 获取或 manager facade 建立依赖，需要谨慎处理初始化顺序。
 
-### 20.9.4 通过 Handler 的跨服务通信
+### 20.8.4 通过 Handler 的跨服务通信
 
 即便都在同一进程中，不同服务仍经常通过 Handler/Message 异步交互，以避免阻塞和锁循环。
 
-### 20.9.5 `SystemServer` Dumper
+### 20.8.5 `SystemServer` Dumper
 
 ```bash
 # List all dumpables
@@ -567,160 +446,160 @@ Dumper 提供除 Binder 服务外的内部状态转储能力。
 
 ---
 
-## 20.10 错误处理与恢复
+## 20.9 错误处理与恢复
 
-### 20.10.1 `reportWtf` 模式
+### 20.9.1 `reportWtf` 模式
 
 `reportWtf` 用于记录严重但未必立刻致命的系统错误，是 `system_server` 重要的异常上报模式。
 
-### 20.10.2 Early WTF 处理
+### 20.9.2 Early WTF 处理
 
 在 boot 早期，错误处理更敏感，因为很多恢复路径尚未可用。
 
-### 20.10.3 待机关闭检查
+### 20.9.3 待机关闭检查
 
 系统需要避免在 shutdown 过程中误触发某些错误恢复逻辑。
 
-### 20.10.4 安全模式
+### 20.9.4 安全模式
 
 Safe mode 提供最小化系统启动路径，帮助设备在异常状态下仍可进入恢复或调试环境。
 
-### 20.10.5 FD 泄漏检测
+### 20.9.5 FD 泄漏检测
 
 文件描述符泄漏会导致长期稳定性问题，系统具备相应检测与日志支持。
 
-### 20.10.6 `CriticalEventLog`
+### 20.9.6 `CriticalEventLog`
 
 该日志聚合关键事件，帮助分析系统级故障与恢复行为。
 
 ---
 
-## 20.11 性能考量
+## 20.10 性能考量
 
-### 20.11.1 启动时间优化
+### 20.10.1 启动时间优化
 
 并行初始化、延迟初始化、条件化启动和 APEX 模块按需加载是降低 boot time 的关键手段。
 
-### 20.11.2 内存优化
+### 20.10.2 内存优化
 
 通过 Zygote 继承、共享对象、避免冗余缓存和及时释放临时结构降低 `system_server` 内存占用。
 
-### 20.11.3 Binder 性能
+### 20.10.3 Binder 性能
 
 Binder 调用频率、序列化成本和线程池占用会直接影响 `system_server` 响应性。
 
-### 20.11.4 慢日志阈值
+### 20.10.4 慢日志阈值
 
 系统对服务启动、消息处理和 Binder 调用设置慢日志阈值，以识别性能热点。
 
 ---
 
-## 20.12 APEX 模块服务加载
+## 20.11 APEX 模块服务加载
 
-### 20.12.1 模块化挑战
+### 20.11.1 模块化挑战
 
 当服务由 APEX 提供时，`system_server` 不能再假设所有类都在同一系统镜像中，需要动态发现与类加载。
 
-### 20.12.2 `SystemServerClassLoaderFactory`
+### 20.11.2 `SystemServerClassLoaderFactory`
 
 该工厂为来自 APEX 的 JAR/service 创建专用 class loader，是模块化服务启动的关键部件。
 
-### 20.12.3 带模块的服务生命周期
+### 20.11.3 带模块的服务生命周期
 
 模块服务仍要融入相同的 `SystemService` 生命周期和 boot phase，但其代码来源和类加载链不同。
 
-### 20.12.4 完整 APEX JAR 路径
+### 20.11.4 完整 APEX JAR 路径
 
 AOSP 中存在明确的 APEX JAR 路径拼接和发现逻辑，用于定位模块服务实现。
 
 ---
 
-## 20.13 设备特定与形态特定服务
+## 20.12 设备特定与形态特定服务
 
-### 20.13.1 设备特定服务
+### 20.12.1 设备特定服务
 
 OEM 可按设备能力和功能需求附加设备特定系统服务。
 
-### 20.13.2 手表特定服务
+### 20.12.2 手表特定服务
 
 手表设备常加入低功耗、表盘、身体传感器与通知相关特化服务。
 
-### 20.13.3 车载特定服务
+### 20.12.3 车载特定服务
 
 车载系统强调多用户、车辆状态、导航与安全策略集成。
 
-### 20.13.4 TV 特定服务
+### 20.12.4 TV 特定服务
 
 TV 形态常引入 HDMI、CEC、电视输入与推荐系统相关服务。
 
-### 20.13.5 IoT 服务
+### 20.12.5 IoT 服务
 
 IoT 设备可能启用更轻量或更专用的服务集合。
 
 ---
 
-## 20.14 SystemUI 启动
+## 20.13 SystemUI 启动
 
-### 20.14.1 最后一步
+### 20.13.1 最后一步
 
 系统服务主干启动后，`system_server` 会触发 SystemUI 进程或组件的启动，标志着用户可见系统界面即将就绪。
 
-### 20.14.2 Boot Completed 阶段
+### 20.13.2 Boot Completed 阶段
 
 `BOOT_COMPLETED` 阶段使许多服务和应用开始执行延后工作，是系统从“可启动”转向“可用”的关键节点。
 
-### 20.14.3 无限循环
+### 20.13.3 无限循环
 
 `system_server` 启动完成后并不会退出，而是进入主 looper/binder 驱动的长期运行状态。
 
 ---
 
-## 20.15 调试 `system_server`
+## 20.14 调试 `system_server`
 
-### 20.15.1 常见失败模式
+### 20.14.1 常见失败模式
 
 包括死锁、Watchdog 超时、Binder 线程池耗尽、服务启动失败、boot loop 和内存膨胀等。
 
-### 20.15.2 获取线程转储
+### 20.14.2 获取线程转储
 
 ```bash
 # Method 1: SIGQUIT (generates ANR trace)
 # Method 2: debuggerd (native + Java stacks)
 ```
 
-### 20.15.3 识别死锁
+### 20.14.3 识别死锁
 
 通过线程栈、锁持有关系、LockGuard 和 Watchdog monitor 输出可定位死锁模式。
 
-### 20.15.4 分析启动时序
+### 20.14.4 分析启动时序
 
 ```bash
 # Get timing for each service start
 ```
 
-### 20.15.5 读取 Watchdog 转储
+### 20.14.5 读取 Watchdog 转储
 
 ```bash
 # Check DropBox for Watchdog entries
 # Check kernel log for the kill
 ```
 
-### 20.15.6 Profiling `system_server`
+### 20.14.6 Profiling `system_server`
 
 ```bash
 # CPU profiling with simpleperf
 # Java method tracing (debug builds)
 ```
 
-### 20.15.7 有用的系统属性
+### 20.14.7 有用的系统属性
 
 系统属性常用于开启详细日志、调整阈值和启用调试行为。
 
 ---
 
-## 20.16 编写自定义系统服务
+## 20.15 编写自定义系统服务
 
-### 20.16.1 服务结构模板
+### 20.15.1 服务结构模板
 
 自定义系统服务通常包括：
 
@@ -730,123 +609,123 @@ IoT 设备可能启用更轻量或更专用的服务集合。
 - Local service 发布
 - 合适的线程模型与权限检查
 
-### 20.16.2 在 `SystemServer` 中注册
+### 20.15.2 在 `SystemServer` 中注册
 
 需要在合适启动阶段实例化并注册该服务，并处理 boot phase 与用户生命周期。
 
-### 20.16.3 线程安全考量
+### 20.15.3 线程安全考量
 
 服务内部必须明确锁顺序、Handler 线程边界和 Binder 调用的同步策略。
 
-### 20.16.4 使用 Ravenwood 测试
+### 20.15.4 使用 Ravenwood 测试
 
 Ravenwood 等测试框架帮助在受控环境中验证系统服务逻辑。
 
 ---
 
-## 20.17 `startApexServices()` 阶段
+## 20.16 `startApexServices()` 阶段
 
-### 20.17.1 APEX 服务发现
+### 20.16.1 APEX 服务发现
 
 此阶段会扫描可用模块并启动由 APEX 提供的 system services。
 
-### 20.17.2 更新 Watchdog 超时
+### 20.16.2 更新 Watchdog 超时
 
 由于 APEX 服务启动可能增加时延，系统会相应调整 Watchdog 关注窗口。
 
 ---
 
-## 20.18 锁顺序与死锁预防
+## 20.17 锁顺序与死锁预防
 
-### 20.18.1 锁层级
+### 20.17.1 锁层级
 
 `system_server` 中常定义显式锁层级，以避免跨服务循环等待。
 
-### 20.18.2 `LockGuard`
+### 20.17.2 `LockGuard`
 
 LockGuard 是辅助检测与约束锁顺序的工具，帮助在开发阶段发现危险加锁模式。
 
-### 20.18.3 `ThreadPriorityBooster`
+### 20.17.3 `ThreadPriorityBooster`
 
 该机制可在持锁关键路径短暂提升线程优先级，减少高优先级线程因锁竞争而被延迟。
 
-### 20.18.4 常见死锁模式
+### 20.17.4 常见死锁模式
 
 典型模式包括双向 Binder 调用持锁、主线程等待后台线程而后台线程又等待主线程、跨服务锁顺序不一致等。
 
 ---
 
-## 20.19 内存架构
+## 20.18 内存架构
 
-### 20.19.1 Heap 配置
+### 20.18.1 Heap 配置
 
 `system_server` 具有特定堆配置，以适应长期运行和大对象图需求。
 
-### 20.19.2 共享内存优化
+### 20.18.2 共享内存优化
 
 与 Zygote 共享、Binder ashmem/共享内存和图形缓冲共享都影响其内存布局。
 
-### 20.19.3 Zygote 内存继承
+### 20.18.3 Zygote 内存继承
 
 大量类和部分对象从 Zygote 继承，可减少初始内存占用与启动成本。
 
-### 20.19.4 GC 考量
+### 20.18.4 GC 考量
 
 系统服务对象存活时间长，GC 行为和对象生命周期分布与普通应用不同。
 
 ---
 
-## 20.20 `SystemServerInitThreadPool`
+## 20.19 `SystemServerInitThreadPool`
 
-### 20.20.1 目的
+### 20.19.1 目的
 
 该线程池用于并行执行安全可并发的初始化任务，加速系统启动。
 
-### 20.20.2 使用模式
+### 20.19.2 使用模式
 
 服务或初始化步骤可把耗时任务提交到该线程池，并在后续合适点等待其完成。
 
-### 20.20.3 同步
+### 20.19.3 同步
 
 所有并发初始化都必须在依赖被真正使用前完成同步，避免竞态条件。
 
-### 20.20.4 转储状态
+### 20.19.4 转储状态
 
 线程池状态可通过调试输出或 dumper 查看。
 
 ---
 
-## 20.21 Binder 事务监控
+## 20.20 Binder 事务监控
 
-### 20.21.1 事务回调
+### 20.20.1 事务回调
 
 系统可对 Binder 事务建立监控回调，用于性能统计、异常诊断和调用行为分析。
 
-### 20.21.2 GC 后内存指标
+### 20.20.2 GC 后内存指标
 
 某些监控会在 GC 后统计关键内存指标，用于观察服务健康度。
 
 ---
 
-## 20.22 `system_server` 中的特性开关
+## 20.21 `system_server` 中的特性开关
 
-### 20.22.1 由 Flag 控制的服务启动
+### 20.21.1 由 Flag 控制的服务启动
 
 越来越多服务启动由 feature flags 控制，以支持灰度发布、模块化和故障回退。
 
-### 20.22.2 `FeatureFlagsService`
+### 20.21.2 `FeatureFlagsService`
 
 该服务集中提供 flag 查询与部分恢复逻辑，是配置化系统行为的基础设施之一。
 
-### 20.22.3 Crash Recovery Flags
+### 20.21.3 Crash Recovery Flags
 
 某些 crash recovery 行为也由 flag 控制，以便快速关闭有风险的新逻辑。
 
 ---
 
-## 20.23 架构图
+## 20.22 架构图
 
-### 20.23.1 完整 `system_server` 架构
+### 20.22.1 完整 `system_server` 架构
 
 ```mermaid
 flowchart TD
@@ -859,7 +738,7 @@ flowchart TD
     SS --> Apex[APEX Module Services]
 ```
 
-### 20.23.2 Boot Sequence 时间线
+Boot Sequence 时间线：
 
 ```mermaid
 sequenceDiagram
@@ -877,7 +756,7 @@ sequenceDiagram
     SS->>SystemUI: launch
 ```
 
-### 20.23.3 服务注册流
+### 20.22.2 服务注册流
 
 ```mermaid
 flowchart LR
@@ -889,25 +768,25 @@ flowchart LR
 
 ---
 
-## 20.24 历史背景
+## 20.23 历史背景
 
-### 20.24.1 `system_server` 的演进
+### 20.23.1 `system_server` 的演进
 
 `system_server` 从较小的框架进程逐步发展为承载数百个系统服务和复杂模块化逻辑的核心系统进程。
 
-### 20.24.2 单体模式
+### 20.23.2 单体模式
 
 它体现了典型单体进程模式：大量服务驻留一个高权限进程，共享内存与类加载环境。
 
-### 20.24.3 为什么不是微服务
+### 20.23.3 为什么不是微服务
 
 Android 选择单体模式主要出于性能、启动时延、进程间通信成本和共享状态复杂度考虑。
 
 ---
 
-## 20.25 快速参考
+## 20.24 快速参考
 
-### 20.25.1 源文件索引
+### 20.24.1 源文件索引
 
 | 路径 | 用途 |
 |------|------|
@@ -916,19 +795,19 @@ Android 选择单体模式主要出于性能、启动时延、进程间通信成
 | `frameworks/base/services/core/java/com/android/server/SystemServiceManager.java` | 服务管理器 |
 | `frameworks/base/services/core/java/com/android/server/Watchdog.java` | Watchdog |
 
-### 20.25.2 Boot Phase 快速参考
+### 20.24.2 Boot Phase 快速参考
 
 Boot phase 用于分步启动和通知服务 readiness。
 
-### 20.25.3 线程快速参考
+### 20.24.3 线程快速参考
 
 主线程、UI 线程、前台线程、IO 线程、后台线程和显示相关线程构成主要运行骨架。
 
-### 20.25.4 关键常量
+### 20.24.4 关键常量
 
 包括 boot phase 常量、Watchdog timeout、线程优先级与日志阈值等。
 
-### 20.25.5 常用 `dumpsys` 命令
+### 20.24.5 常用 `dumpsys` 命令
 
 ```bash
 # Essential dumpsys Commands
@@ -936,143 +815,260 @@ Boot phase 用于分步启动和通知服务 readiness。
 
 ---
 
-## 20.26 `BackupManagerService`
+## 20.25 `BackupManagerService`
 
-### 20.26.1 架构概览
+### 20.25.1 架构概览
 
 BackupManagerService 负责系统备份与恢复主流程，协调 transport、包管理、用户、策略和回调协议。
 
-### 20.26.2 启用与禁用
+### 20.25.2 启用与禁用
 
 备份服务可因用户设置、设备策略、构建类型或恢复场景而启用或关闭。
 
-### 20.26.3 Backup Transports
+### 20.25.3 Backup Transports
 
 Transport 抽象云端、本地或 OEM 备份后端，使备份框架与实际存储目的地解耦。
 
-### 20.26.4 键值备份 vs 全量备份
+### 20.25.4 键值备份 vs 全量备份
 
 键值备份更轻量；全量备份更完整但成本更高。系统按应用能力和策略选择路径。
 
-### 20.26.5 `BackupHandler` 消息协议
+### 20.25.5 `BackupHandler` 消息协议
 
 内部大量通过 Handler message 协调备份任务、超时、transport 调用与重试。
 
-### 20.26.6 备份资格
+### 20.25.6 备份资格
 
 并非所有应用都可被备份，需考虑 manifest、用户策略、系统应用特性与权限限制。
 
-### 20.26.7 恢复操作
+### 20.25.7 恢复操作
 
 恢复流程需协调目标应用状态、数据写入、权限和一致性约束。
 
-### 20.26.8 云端 vs 本地备份
+### 20.25.8 云端 vs 本地备份
 
 云端备份强调跨设备恢复，本地备份强调离线与局部可控性。
 
-### 20.26.9 多用户考量
+### 20.25.9 多用户考量
 
 备份数据必须与用户空间严格隔离，避免跨用户泄露或错误恢复。
 
 ---
 
-## 20.27 `CrashRecoveryModule` 与 `RescueParty`
+## 20.26 `CrashRecoveryModule` 与 `RescueParty`
 
-### 20.27.1 CrashRecoveryModule 生命周期
+### 20.26.1 CrashRecoveryModule 生命周期
 
 CrashRecoveryModule 在系统启动和运行过程中监控关键异常，并决定何时启用更激进恢复策略。
 
-### 20.27.2 `PackageWatchdog`
+### 20.26.2 `PackageWatchdog`
 
 PackageWatchdog 监控包级崩溃与恢复情况，为模块化服务和系统组件提供健康度追踪。
 
-### 20.27.3 `RescueParty` 升级级别
+### 20.26.3 `RescueParty` 升级级别
 
 RescueParty 通过逐级升级策略执行恢复动作，例如重置设置、回滚模块乃至更严重措施。
 
-### 20.27.4 RescueParty 禁用条件
+### 20.26.4 RescueParty 禁用条件
 
 在某些构建类型、开发环境或特定策略下，RescueParty 可能被禁用或降级。
 
-### 20.27.5 Boot Loop 检测
+### 20.26.5 Boot Loop 检测
 
 系统会根据连续重启和关键服务异常判断是否进入 boot loop 场景。
 
-### 20.27.6 恢复出厂节流
+### 20.26.6 恢复出厂节流
 
 为避免激进恢复策略误伤设备，系统会对 factory reset 等极端动作加节流与保护条件。
 
-### 20.27.7 `CrashRecoveryHelper`
+### 20.26.7 `CrashRecoveryHelper`
 
 辅助类负责汇总状态、调用恢复模块与提供诊断工具接口。
 
-### 20.27.8 与 `RollbackManager` 集成
+### 20.26.8 与 `RollbackManager` 集成
 
 模块化时代，崩溃恢复可以与回滚管理器协同，优先回滚有问题的模块版本。
 
 ---
 
-## 20.28 `ClipboardService`
+## 20.27 `ClipboardService`
 
-### 20.28.1 架构概览
+### 20.27.1 架构概览
 
 ClipboardService 管理系统剪贴板数据、权限控制、通知和跨设备/虚拟设备隔离。
 
-### 20.28.2 剪贴板数据模型
+### 20.27.2 剪贴板数据模型
 
 剪贴板基于 `ClipData` 和 `ClipDescription` 建模，可包含文本、URI、Intent 等多种载荷。
 
-### 20.28.3 跨应用安全限制
+### 20.27.3 跨应用安全限制
 
 现代 Android 对后台应用读取剪贴板有严格限制，以降低敏感数据泄露风险。
 
-### 20.28.4 剪贴板访问通知
+### 20.27.4 剪贴板访问通知
 
 系统可能在应用访问剪贴板时向用户显示提示，提升透明度。
 
-### 20.28.5 自动清空剪贴板
+### 20.27.5 自动清空剪贴板
 
 为保护隐私，系统可在一定时间后自动清除剪贴板内容。
 
-### 20.28.6 虚拟设备剪贴板隔离
+### 20.27.6 虚拟设备剪贴板隔离
 
 虚拟设备或多实例环境中，系统可为不同上下文提供独立剪贴板空间。
 
-### 20.28.7 Emulator 与 ARC 集成
+### 20.27.7 Emulator 与 ARC 集成
 
 在 Emulator 或 ARC 场景中，剪贴板可能与宿主系统存在桥接与同步逻辑。
 
 ---
 
-## 20.29 `DownloadManager` 与 `DownloadProvider`
+## 20.28 `DownloadManager` 与 `DownloadProvider`
 
-### 20.29.1 架构
+### 20.28.1 架构
 
 DownloadManager API 与 DownloadProvider 数据库/执行后端共同组成下载系统。
 
-### 20.29.2 下载数据库
+### 20.28.2 下载数据库
 
 DownloadProvider 持有下载任务数据库，记录 URL、状态、重试、目标路径和通知信息。
 
-### 20.29.3 使用 `JobScheduler` 执行下载
+### 20.28.3 使用 `JobScheduler` 执行下载
 
 现代下载执行常依赖 JobScheduler，根据网络、电量和设备状态调度下载任务。
 
-### 20.29.4 重试逻辑
+### 20.28.4 重试逻辑
 
 系统根据错误类型、HTTP 状态、网络可用性和指数退避策略决定重试时机。
 
-### 20.29.5 通知集成
+### 20.28.5 通知集成
 
 下载进度和完成状态通常通过通知系统反馈给用户。
 
-### 20.29.6 网络感知
+### 20.28.6 网络感知
 
 下载逻辑会考虑网络类型、计费网络、漫游和带宽约束。
 
-## Summary
+## 20.29 动手实践
 
-## 总结
+### 20.29.1 列出所有系统服务
+
+使用 `service list`、`dumpsys -l` 或 SystemServer dumper 查看系统服务目录。
+
+### 20.29.2 检查 `system_server` 进程
+
+```bash
+# Process ID
+# Thread count
+# Process status
+# Memory usage
+```
+
+### 20.29.3 `dumpsys` 命令
+
+```bash
+# Dump all services (very long!)
+# Dump a specific service
+# Dump the SystemServer dumper for internal state
+```
+
+### 20.29.4 检查 Boot Phases
+
+```bash
+# View boot timing events
+# View SystemServer timing tags
+# Full boot tracing with Perfetto
+```
+
+### 20.29.5 观察服务启动顺序
+
+```bash
+# Filter for service start messages
+# Look for specific boot phase transitions
+```
+
+### 20.29.6 Watchdog 诊断
+
+```bash
+# Dump Watchdog state
+# View Watchdog-related logs
+# Check for past Watchdog kills
+# View timeout history
+```
+
+### 20.29.7 线程检查
+
+```bash
+# List all system_server threads with names
+# View specific named threads
+# Get Java thread dump (sends SIGQUIT)
+# Then check /data/anr/ for the trace file
+```
+
+### 20.29.8 服务依赖与启动耗时
+
+```bash
+# View how long each service took to start
+# Check if a specific service is running
+# Call a service directly
+```
+
+### 20.29.9 检查 `SystemServiceManager` 状态
+
+```bash
+# Dump all registered system services
+```
+
+### 20.29.10 监控 Binder 线程池
+
+```bash
+# Check Binder thread usage
+# View Binder calls stats
+# View specific Binder transaction information
+```
+
+### 20.29.11 强制 Watchdog 超时（仅开发环境）
+
+```bash
+# Reduce watchdog timeout (settings must be available)
+# Or use the debug property
+```
+
+### 20.29.12 使用 Perfetto 追踪服务启动
+
+```bash
+# Record a boot trace
+# After reboot, pull the trace
+# Open in ui.perfetto.dev
+```
+
+### 20.29.13 模拟 Boot Phases
+
+```bash
+# Reboot and immediately start capturing
+```
+
+### 20.29.14 检查服务注册
+
+```bash
+# 检查 service 是否存在并获取 interface descriptor
+# 获取 service 调试信息，包括 PID 与 interface
+```
+
+### 20.29.15 监控 Looper 统计
+
+```bash
+# 导出 looper 统计以查看消息处理耗时
+# 每个 looper 会显示以下信息：
+# - 消息数量
+# - 总耗时
+# - 最大耗时
+# - 异常数量
+```
+
+---
+
+## 小结
 
 `system_server` 是 Android framework 服务层的中枢，其核心职责包括：
 

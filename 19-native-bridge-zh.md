@@ -2,21 +2,6 @@
 
 Android 的 Native Bridge 机制允许设备在宿主 ISA 与应用 native 库目标 ISA 不一致时，仍然运行这些二进制代码。它是 Android 在模拟器、跨架构迁移、RISC-V 生态建设和兼容历史 ARM/x86 应用时的重要基础设施。本章从 NativeBridge 接口、Berberis、`native_bridge_support`、Houdini、模拟器配置以及 RISC-V 演进几个方面系统梳理 AOSP 中的二进制翻译体系。
 
----
-
-## Chapter map
-
-本章主要分为以下几部分：
-
-- `NativeBridge` 接口与状态机
-- Berberis 二进制翻译器
-- `native_bridge_support` 访客库生态
-- Houdini 与历史兼容实现
-- Android Emulator 的 Native Bridge 配置
-- RISC-V 及未来方向
-
----
-
 ## 19.1 NativeBridge 接口
 
 ### 19.1.1 为什么需要 Native Bridge
@@ -326,9 +311,36 @@ IBT 是 Houdini 生态中的相关品牌和技术概念，用于描述 Intel 在
 
 ---
 
-## 19.5 Android Emulator Native Bridge
+## 19.5 DigitalisX64：基于 Berberis 的 ARM64 到 x86_64 翻译器
 
-### 19.5.1 Board 配置
+DigitalisX64 是一个开源 ARM64 到 x86_64 二进制翻译器，它建立在 19.2 节介绍的 Berberis 引擎之上。Berberis 是 AOSP 中的上游参考实现，而 DigitalisX64 把它打包成面向 x86_64 模拟器（Goldfish）的可构建发行形态，使只有 ARM64 native 库的 Android 应用可以在 x86_64 host 环境中运行。
+
+### 19.5.1 源码布局
+
+DigitalisX64 通过顶层 `repo` manifest 组合少量仓库：
+
+| 仓库 | 作用 |
+|---|---|
+| `manifest` | 映射 AOSP 与 DigitalisX64 fork 的 `repo` manifest |
+| `digitalis` | 构建和使用文档入口 |
+| `platform_frameworks_libs_binary_translation` | 位于 `frameworks/libs/binary_translation/` 的 Berberis fork |
+| `device_generic_goldfish` | 接入 DigitalisX64 NativeBridge 的模拟器设备目标 |
+| `sample_hello_digitalis` | 在 x86_64 host 上运行 ARM64 guest 代码的最小样例 |
+| `digitalisx64.github.io` | 项目网站 |
+
+### 19.5.2 构建与运行
+
+该项目跟随 `android-latest-release` AOSP 分支，典型流程是初始化 manifest、同步源码、选择 `sdk_phone64_x86_64_digitalis-trunk_staging-userdebug` lunch 目标，然后构建并启动 emulator。这个目标会产出一个预装 Berberis runtime 的 Goldfish x86_64 系统镜像，并配置 `ro.dalvik.vm.native.bridge`，让 ARM64-only APK 通过标准 NativeBridge 分发路径进入翻译器。
+
+### 19.5.3 与 Berberis 和 Houdini 的关系
+
+DigitalisX64 与 Houdini 处在不同设计位置：Houdini / IBT 是闭源、面向授权设备和 ChromeOS 的 Intel 方案；DigitalisX64 是基于 Berberis 的开放实现，主要目标是 x86_64 模拟器，并可通过公开 manifest 重现构建。由于底层引擎仍是 Berberis，19.2 节讲到的 decoder、interpreter、guest state、trampoline 与双 namespace loader 仍然适用。DigitalisX64 主要贡献 manifest、设备树和构建接线，而不是新的翻译器核心。
+
+---
+
+## 19.6 Android Emulator Native Bridge
+
+### 19.6.1 Board 配置
 
 ```text
 # Source: build/make/target/board/generic_x86_64_arm64/BoardConfig.mk:16-32
@@ -340,7 +352,7 @@ IBT 是 Houdini 生态中的相关品牌和技术概念，用于描述 Intel 在
 
 这说明模拟器可把 ARM/ARM64 应用作为 bridge ABI 暴露给系统。
 
-### 19.5.2 ABI 列表构建
+### 19.6.2 ABI 列表构建
 
 ```text
 # Source: build/make/core/board_config.mk:387-395
@@ -350,67 +362,67 @@ IBT 是 Houdini 生态中的相关品牌和技术概念，用于描述 Intel 在
 
 系统最终向应用和包管理暴露的 ABI 列表，既包含宿主原生 ABI，也包含桥接 ABI。
 
-### 19.5.3 NDK Translation Package
+### 19.6.3 NDK Translation Package
 
 模拟器场景通常还需要 NDK translation package，以提供 guest ISA 下的稳定 NDK 库集合。
 
-### 19.5.4 Soong 架构变体
+### 19.6.4 Soong 架构变体
 
 Soong 需要为宿主与桥接架构同时创建变体，以生成正确的二进制与安装布局。
 
-### 19.5.5 图形与 Vulkan Bridge 支持
+### 19.6.5 图形与 Vulkan Bridge 支持
 
 若要完整运行 guest 应用，NativeBridge 不仅要处理普通 JNI/NDK 库，还可能需要图形栈和 Vulkan 相关支持。
 
-### 19.5.6 模拟器与设备 Bridge 对比
+### 19.6.6 模拟器与设备 Bridge 对比
 
 模拟器更强调开发、验证与兼容覆盖；真实设备则更关注性能、功耗和部署复杂度。
 
-### 19.5.7 翻译生态
+### 19.6.7 翻译生态
 
 完整翻译生态通常由：NativeBridge 实现、guest 库集、proxy/support 库、NDK translation、linker namespace 与图形支持共同组成。
 
 ---
 
-## 19.6 RISC-V 与未来
+## 19.7 RISC-V 与未来
 
-### 19.6.1 AOSP 中的 RISC-V
+### 19.7.1 AOSP 中的 RISC-V
 
 RISC-V 在 AOSP 中是持续推进的新架构方向。NativeBridge 对其意义尤其大，因为在生态尚未完全原生化前，二进制翻译可提供过渡兼容能力。
 
-### 19.6.2 工具链
+### 19.7.2 工具链
 
 RISC-V 支持依赖 Clang/LLVM、binutils 相关工具和多架构构建流水线。
 
-### 19.6.3 产品配置
+### 19.7.3 产品配置
 
 产品配置需要同时定义宿主 ISA、guest ISA、bridge 库名称、guest ABI 列表和 support package。
 
-### 19.6.4 分发产物
+### 19.7.4 分发产物
 
 桥接方案涉及系统镜像中的 bridge 库、guest support 库、translation package 和可能的测试工具。
 
-### 19.6.5 `binfmt_misc` 集成
+### 19.7.5 `binfmt_misc` 集成
 
 在某些 host/开发场景中，可借助 `binfmt_misc` 让系统透明地把某类 guest 二进制交给翻译器执行。
 
-### 19.6.6 为什么 RISC-V 翻译很重要
+### 19.7.6 为什么 RISC-V 翻译很重要
 
 它能缓解生态冷启动问题，使尚未提供宿主架构原生库的应用仍可运行，从而加速新架构 adoption。
 
-### 19.6.7 多目标架构
+### 19.7.7 多目标架构
 
 未来的 Android 翻译系统可能面向多 guest-host 组合，而不是单一方向桥接。
 
-### 19.6.8 扩展支持路线图
+### 19.7.8 扩展支持路线图
 
 RISC-V 扩展支持将影响 decoder、interpreter、guest state 和兼容库集合，是未来演进的重要主题。
 
 ---
 
-## 19.7 动手实践
+## 19.8 动手实践
 
-### Exercise 19.1: 检查 NativeBridge 状态
+### 练习 19.1：检查 NativeBridge 状态
 
 查看设备配置、系统属性和运行状态，确认当前系统是否启用了 NativeBridge。
 
@@ -418,57 +430,55 @@ RISC-V 扩展支持将影响 decoder、interpreter、guest state 和兼容库集
 # Check ISA mappings
 ```
 
-### Exercise 19.2: 检查 Bridge 库
+### 练习 19.2：检查 Bridge 库
 
 ```bash
 # Verify the bridge library exists
 # Check the NativeBridgeItf symbol
 ```
 
-### Exercise 19.3: 列出 Guest 库
+### 练习 19.3：列出 Guest 库
 
 ```bash
 # List guest RISC-V libraries
 # List proxy libraries
 ```
 
-### Exercise 19.4: 运行一个 Guest 二进制
+### 练习 19.4：运行一个 Guest 二进制
 
 ```bash
 # Run on device
 # Run on host
 ```
 
-### Exercise 19.5: 追踪一次 Bridge 加载
+### 练习 19.5：追踪一次 Bridge 加载
 
 ```bash
 # Enable verbose NB logging
 # Install and launch a RISC-V app, then check logs
 ```
 
-### Exercise 19.6: 阅读 `NativeBridgeCallbacks` 头文件
+### 练习 19.6：阅读 `NativeBridgeCallbacks` 头文件
 
 重点观察版本字段、回调集合与 namespace/JNI/trampoline 相关接口。
 
-### Exercise 19.7: 从源码构建 Berberis
+### 练习 19.7：从源码构建 Berberis
 
 验证 Soong 变体、配置文件与生成产物路径是否符合预期。
 
-### Exercise 19.8: 走读一次 Trampoline
+### 练习 19.8：走读一次 Trampoline
 
 从 guest 调用发起到 trampoline 分发，再到 ART/JNI 入口，完整追踪桥接控制流。
 
-### Exercise 19.9: 比较两个头文件
+### 练习 19.9：比较两个头文件
 
 比较系统侧 NativeBridge 头文件与具体桥实现中的接口视图，确认版本和字段保持一致。
 
-### Exercise 19.10: 检查 Decoder Opcodes
+### 练习 19.10：检查 Decoder Opcodes
 
 从 Berberis decoder 代码中观察 guest 指令如何被分派到解释或翻译逻辑。
 
-## Summary
-
-## 总结
+## 小结
 
 Android Native Bridge 体系围绕“跨 ISA 执行 native 二进制”这一目标建立，核心组件如下：
 
@@ -489,7 +499,7 @@ Native Bridge 的关键设计原则包括：
 4. **通过 trampoline 解决 guest/native/JNI 调用边界问题**。
 5. **以桥接 ABI 形式对上层透明暴露能力**。
 
-### Key source files
+### 关键源码文件
 
 | 路径 | 用途 |
 |------|------|

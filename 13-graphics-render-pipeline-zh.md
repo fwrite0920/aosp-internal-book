@@ -232,253 +232,241 @@ EGL 和 GLES 扩展字符串需要合并平台、layer 和驱动三部分结果�
 
 ### 13.3.1 Vulkan Loader 架构
 
-Android 的 Vulkan 实现同样使用 loader 设计。应用链接系统 `libvulkan.so`，系统 loader 负责发现实际厂商驱动、创建 instance 和 device、维护 dispatch table，并桥接 Android surface 与 swapchain。
+Android 的 Vulkan loader 位于 `frameworks/native/vulkan/libvulkan/`。与 EGL 不同，Vulkan 从设计之初就采用了 loader-layer-ICD（可安装客户端驱动）架构。由于 Vulkan 的显式 API 设计减少了 loader 的职责，Android loader 相对较薄。
 
-### 13.3.2 驱动加载（`driver.cpp`）
+```mermaid
+graph TD
+    A["Application"] --> B["libvulkan.so<br/>(AOSP Loader)"]
+    B --> C["API Layer<br/>(api.cpp)"]
+    C --> D["Validation Layers<br/>(Optional)"]
+    D --> E["Driver Layer<br/>(driver.cpp)"]
+    E --> F["Vendor Vulkan HAL<br/>(vulkan.{name}.so)"]
+    F --> G["GPU Hardware"]
 
-`driver.cpp` 负责厂商 Vulkan 驱动发现与装载。核心工作包括查找驱动路径、`dlopen()` 驱动库、读取 `vkGetInstanceProcAddr`、校验 HAL 接口版本，并把 driver hooks 安装到 loader。
+    subgraph "Android Additions"
+        H["Swapchain<br/>(swapchain.cpp)"]
+        I["VkSurfaceKHR<br/>↔ ANativeWindow"]
+    end
+
+    C --> H
+    H --> I
+    I --> E
+
+    style B fill:#2196F3,color:#fff
+    style F fill:#FF9800,color:#fff
+```
+
+### 13.3.2 驱动加载 (`driver.cpp`)
+
+Vulkan HAL 由 `driver.cpp` 中的 `Hal` 类加载。加载序列按优先级顺序尝试多个来源：
+
+```cpp
+// frameworks/native/vulkan/libvulkan/driver.cpp, line 249
+bool Hal::Open() {
+    ATRACE_CALL();
+    const nsecs_t openTime = systemTime();
+
+    if (hal_.ShouldUnloadBuiltinDriver()) {
+        hal_.UnloadBuiltinDriver();
+    }
+    if (hal_.dev_) return true;
+
+    // 除非成功打开真实的 HAL 设备，否则使用 stub 设备。
+    hal_.dev_ = &stubhal::kDevice;
+
+    int result;
+    const hwvulkan_module_t* module = nullptr;
+
+    result = LoadUpdatedDriver(&module);      // 1. 游戏/更新驱动
+    if (result == -ENOENT) {
+        result = LoadDriverFromApex(&module); // 2. Vulkan APEX
+    }
+    if (result == -ENOENT) {
+        result = LoadBuiltinDriver(&module);  // 3. 内置厂商驱动
+    }
+    // ...
+}
+```
+
+`LoadDriver()` 函数通过系统属性搜索厂商 HAL：
+
+```cpp
+// frameworks/native/vulkan/libvulkan/driver.cpp, line 145
+const std::array<const char*, 2> HAL_SUBNAME_KEY_PROPERTIES = {{
+    "ro.hardware.vulkan",
+    "ro.board.platform",
+}};
+```
+
+这会解析并加载位于厂商分区的名为 `vulkan.<property_value>.so` 的共享库。
 
 ### 13.3.3 从 APEX 加载驱动
 
-Android 支持从 APEX 中提供图形驱动或相关组件。APEX 机制为驱动更新提供更可控的模块化发布路径，使部分图形栈可以随系统模块更新而演进。
+Android 支持从 APEX 模块加载 Vulkan 驱动，实现全系统 OTA 之外的驱动更新：
 
-### 13.3.4 Instance 与 Device 创建（`api.cpp`）
+```cpp
+// frameworks/native/vulkan/libvulkan/driver.cpp, line 206
+int LoadDriverFromApex(const hwvulkan_module_t** module) {
+    auto apex_name = android::base::GetProperty("ro.gfx.driver.0", "");
+    if (apex_name.empty()) return -ENOENT;
+    // 从 /apex/com.android.graphics.drivers/ 加载
+}
+```
 
-`api.cpp` 实现 Vulkan loader 对外公开的 API，包括 `vkCreateInstance`、`vkEnumeratePhysicalDevices`、`vkCreateDevice` 等。loader 需要：
+### 13.3.4 Instance 与 Device 创建 (`api.cpp`)
 
-- 过滤和补充 Android 平台要求的扩展。
-- 封装应用传入的 create info。
-- 创建 loader 自身的对象包装层。
-- 把 instance 与 device 级 dispatch table 绑定到返回对象。
+`api.cpp` 实现了面向应用的 API。当应用调用 `vkCreateInstance` 时，loader 会拦截该调用以注入平台所需的扩展：
 
-### 13.3.5 `CreateInfoWrapper` 类
+```cpp
+// frameworks/native/vulkan/libvulkan/api.cpp, line 386
+VKAPI_ATTR VkResult CreateInstance(const VkInstanceCreateInfo* pCreateInfo,
+                                   const VkAllocationCallbacks* pAllocator,
+                                   VkInstance* pInstance) {
+    // 拦截以添加 VK_KHR_android_surface 扩展
+    // 处理 validation layers
+    // 派发到驱动层的 Hal::GetGlobalProcAddr
+}
+```
 
-`CreateInfoWrapper` 用于包装应用提交的 `VkInstanceCreateInfo` 或 `VkDeviceCreateInfo`。它负责安全复制、扩展链处理、字段修正与 Android 平台扩展注入，防止 loader 直接依赖上层可变内存。
+### 13.3.5 Android Swapchain (`swapchain.cpp`)
 
-### 13.3.6 Swapchain：Vulkan 与 Android Surface 的连接点
+Vulkan 与 Android 窗口系统的桥接发生在 `swapchain.cpp` 中。它实现了 `VK_KHR_android_surface` 和 `VK_KHR_swapchain` 扩展。
 
-Swapchain 是 Vulkan 与 Android 图形栈的关键交界面。Android 通过 `ANativeWindow` 把窗口表面抽象暴露给 Vulkan，Vulkan WSI 再基于它创建 `VkSurfaceKHR` 和 `VkSwapchainKHR`。
+关键映射关系：
+- `VkSurfaceKHR` 内部包装了一个 `ANativeWindow` (Surface)。
+- `VkSwapchainKHR` 管理一组从 `ANativeWindow` 出队的 `GraphicBuffer`。
 
-核心流程：
-
-1. 应用从 `Surface` 获取 `ANativeWindow`。
-2. 通过 Android WSI 创建 `VkSurfaceKHR`。
-3. 查询 surface capabilities 与支持格式。
-4. 创建 swapchain images。
-5. 应用渲染到 image 并通过 present 交给 `BufferQueue`。
-6. SurfaceFlinger 消费 buffer 并继续合成。
-
-### 13.3.7 Vulkan Profiles
-
-Vulkan Profiles 提供标准化能力集合，帮助应用判断目标设备是否满足某一功能档位。Android 可通过 GPU service、设置选项或 loader 侧机制查询和暴露这些 profile 信息。
-
-### 13.3.8 Null Driver
-
-Null driver 提供无实际硬件渲染能力的空实现，用于测试、调试或极端 fallback 场景。它帮助验证 loader 行为，而不依赖真实 GPU 驱动。
-
-### 13.3.9 代码生成
-
-Vulkan loader 的大量样板代码通过生成脚本创建，例如 dispatch table、入口声明、扩展枚举和 hook 点定义。代码生成减少手写错误并保持与 Vulkan registry 同步。
-
-### 13.3.10 Dispatch Table 架构
-
-Vulkan 采用分层 dispatch table：
-
-| 级别 | 说明 |
-|------|------|
-| Global | 与实例无关的入口 |
-| Instance | `VkInstance` 级别函数表 |
-| Device | `VkDevice` 级别函数表 |
-|
-
-Loader 通过包装对象头或关联结构找到对应表，再派发到厂商驱动。
-
-### 13.3.11 扩展 Hook 点
-
-扩展 hook 点允许 loader 在特定扩展调用前后执行平台逻辑，例如 Android surface 扩展、调试扩展、profile 查询和平台约束检查。
-
-### 13.3.12 Vulkan Instance 创建流程
-
-Instance 创建的高层流程包括：验证参数、合并平台扩展、创建 loader instance 包装、调用厂商驱动真实 `vkCreateInstance`、建立 dispatch table，并返回包装对象给应用。
-
-### 13.3.13 Physical Device 枚举
-
-`vkEnumeratePhysicalDevices` 在 Android 上由 loader 转发给厂商驱动，并将返回设备包装为 loader 管理对象。多 GPU 设备、外接 GPU 或特定模拟环境会在此阶段暴露多个 physical device。
-
-### 13.3.14 Queue Family 选择
-
-队列族选择直接影响图形、计算、传输和 present 的调度方式。Android 图形应用通常至少需要支持 graphics 与 present 的 queue family；复杂场景还会单独使用 transfer 或 compute 队列以减少资源争用。
+当应用调用 `vkQueuePresentKHR` 时：
+1. Loader 查找对应的 `VkSwapchainKHR`。
+2. 将 buffer 入队到 `ANativeWindow` (`queueBuffer`)。
+3. 触发 `BufferQueue` 流程到达 SurfaceFlinger。
 
 ---
 
-## 13.4 ANGLE
+## 13.4 BufferQueue
 
-### 13.4.1 GL-on-Vulkan Translation
+### 13.4.1 生产者-消费者模型
 
-ANGLE 是一层 OpenGL ES 到 Vulkan 的翻译层。它让应用继续使用 GLES API，同时在底层转换为 Vulkan 命令，从而绕过质量较差或功能不足的原生 GLES 驱动。
+BufferQueue 是 Android 图形架构的核心同步原语。它连接了生成图形数据的组件（生产者）和显示或处理图形数据的组件（消费者）。
 
-### 13.4.2 ANGLE 何时使用
+```mermaid
+graph LR
+    P["Producer<br/>(App/HWUI)"] -->|"dequeueBuffer()"| BQ["BufferQueue"]
+    BQ -->|"queueBuffer()"| P
+    BQ -->|"acquireBuffer()"| C["Consumer<br/>(SurfaceFlinger)"]
+    C -->|"releaseBuffer()"| BQ
 
-ANGLE 会在以下场景被启用：
+    style BQ fill:#2196F3,color:#fff
+```
 
-- 系统或开发者选项为特定应用启用 ANGLE。
-- 设备厂商或 Google 通过策略为兼容性问题应用启用 ANGLE。
-- 调试或验证需要 Vulkan validation 与统一行为时。
+### 13.4.2 核心组件
 
-### 13.4.3 ANGLE 的收益
+BufferQueue 逻辑主要位于 `frameworks/native/libs/gui/`：
 
-ANGLE 的主要收益包括更一致的驱动行为、更好的兼容性、更稳定的扩展支持，以及更容易接入 Vulkan 工具链和调试设施。
+1. **`BufferQueueCore`**: 存储状态、缓冲区数组和同步原语。
+2. **`BufferQueueProducer`**: 实现 `IGraphicBufferProducer` 接口。
+3. **`BufferQueueConsumer`**: 实现 `IGraphicBufferConsumer` 接口。
+4. **`GraphicBuffer`**: 跨进程共享的像素数据容器。
 
-### 13.4.4 ANGLE 架构
+### 13.4.3 缓冲区状态机
 
-ANGLE 包含 `libEGL_angle.so`、`libGLESv2_angle.so`、内部 Vulkan backend 和 GLSL/ESSL 到中间表示再到 SPIR-V 的编译路径。Android loader 可以把 EGL/GLES 调用导向 ANGLE，再由 ANGLE 完成 Vulkan 提交。
+每个缓冲区在 BufferQueue 中经历四个状态：FREE (可出队)、DEQUEUED (生产者持有)、QUEUED (等待消费)、ACQUIRED (正在合成)。
 
----
+### 13.4.4 帧释放与 Fence 同步
 
-## 13.5 Skia
+为了实现零拷贝和最大并发，BufferQueue 严重依赖 **Fence (栅栏)**。
 
-### 13.5.1 Skia 在 Android 中的角色
+```cpp
+// 生产者出队
+status_t BufferQueueProducer::dequeueBuffer(int* outSlot, sp<Fence>* outFence, ...) {
+    // 返回一个 fence，指示该 buffer 何时可供 GPU 写入
+}
 
-Skia 是 Android 2D 图形渲染核心。它承担 Canvas、文本、路径、图片解码后的绘制、HWUI 后端、SurfaceFlinger RenderEngine 的 GPU 路径，以及多种软件或 GPU raster 任务。
-
-Skia 在 Android 中同时服务：
-
-- 应用 UI 绘制。
-- 图像解码与后处理。
-- SurfaceFlinger GPU 合成。
-- PDF、截图、打印等图形输出。
-
-### 13.5.2 Core API（`include/core/`）
-
-Skia Core API 提供 `SkCanvas`、`SkPaint`、`SkPath`、`SkImage`、`SkSurface`、`SkFont` 等基础对象。Android HWUI 大量依赖这些对象来表达绘图命令。
-
-### 13.5.3 Ganesh GPU Backend（`src/gpu/ganesh/`）
-
-Ganesh 是 Skia 的成熟 GPU backend。它支持 OpenGL 和 Vulkan，通过 `GrDirectContext` 管理 GPU 资源、command buffer、纹理、atlas、pipeline state 与缓存。
-
-### 13.5.4 Graphite：下一代 Backend
-
-Graphite 是 Skia 新一代 GPU backend，目标是更现代的 command recording、资源调度和显式 API 适配。Android 当前仍以 Ganesh 为主，但 Graphite 代表未来演进方向。
-
-### 13.5.5 SkSL：Skia 的着色语言
-
-SkSL 是 Skia 的 shading language，用于表达 runtime effects、部分颜色滤镜和内部着色逻辑。SkSL 可被编译到 GLSL、SPIR-V 或其他后端表示。
-
-### 13.5.6 Codec 与图片解码
-
-Skia 提供图像编解码框架，支持 PNG、JPEG、WebP、GIF 等格式。Android 图像解码部分能力由 Skia 承担，并与 `ImageDecoder`、`BitmapFactory` 等上层 API 集成。
-
-### 13.5.7 文本渲染
-
-文本渲染涉及字体匹配、glyph cache、subpixel positioning、文本 blob 和 atlas 管理。Skia 与 Minikin、HarfBuzz 等文本组件协作完成 Android 文本绘制。
-
-### 13.5.8 SIMD 优化
-
-Skia 在像素混合、颜色转换、图像滤镜、栅格化等热点路径中使用 NEON、SSE、AVX 等 SIMD 优化，以提升 CPU raster 和预处理性能。
-
-### 13.5.9 Skia 的录制与回放模型
-
-Skia 支持把绘制命令录制为命令流，再在后续阶段回放。Android HWUI 的 DisplayList 和 Skia display list 模型正是基于这一思想，以降低 UI Thread 负担并支持属性增量更新。
-
-### 13.5.10 Ganesh 中的 GPU 资源管理
-
-Ganesh 通过资源缓存与预算系统管理纹理、buffer、render target 和 atlas。它根据内存预算回收资源，避免 GPU 内存无限增长。
-
-### 13.5.11 Skia 的 Path Rendering
-
-Path rendering 是 Skia 的复杂能力之一，涉及 path tessellation、stencil、analytic AA 和 GPU path fallback。复杂路径与 clip 常是移动端 UI 性能热点。
-
-### 13.5.12 `SkSurface` 与渲染目标
-
-`SkSurface` 表示一个可绘制目标。它可以是 CPU bitmap、GPU render target、后端 texture 或 Android hardware buffer 封装。HWUI 通常把 window buffer 或 layer buffer 封装为 `SkSurface` 进行绘制。
-
-### 13.5.13 文本 Atlas 管理
-
-文本 atlas 用于缓存 glyph 位图或距离场纹理，减少重复栅格化。Atlas 命中率会显著影响文本渲染性能和 GPU 提交次数。
+// 生产者入队
+status_t BufferQueueProducer::queueBuffer(int slot, const QueueBufferInput& input, ...) {
+    // 传入一个 fence，指示 GPU 写入何时完成
+}
+```
 
 ---
 
-## 13.6 HWUI
+## 13.5 SurfaceFlinger
 
-### 13.6.1 HWUI 的目的
+### 13.5.1 系统合成器进程
 
-HWUI 是 Android View 系统的硬件加速渲染层。它把 Java View 的 `Canvas` 绘制转换为 native DisplayList，再由 RenderThread 和 Skia pipeline 执行 GPU 绘制。
+SurfaceFlinger 是 Android 的系统级组合器。它的职责是消费所有应用产生的 buffers，根据 Z-order 和透明度进行合成，并驱动显示硬件。
 
-### 13.6.2 `Canvas` 接口
+### 13.5.2 核心循环与 VSYNC 调度
 
-Java `Canvas` 提供 `drawRect`、`drawText`、`drawBitmap`、`save`、`restore`、`clipRect`、`translate`、`scale`、`rotate` 等绘图 API。硬件加速开启时，这些 API 会映射到 native recording canvas，而不是立刻 raster 到像素。
+SurfaceFlinger 是事件驱动的。它通过 `MessageQueue` 和 `EventThread` 监听 VSYNC 信号。
 
-### 13.6.3 Canvas Op Types
+```mermaid
+sequenceDiagram
+    participant D as DispSync
+    participant ET as EventThread
+    participant SF as SurfaceFlinger
 
-Canvas op 可分为：
+    D->>ET: VSYNC signal
+    ET->>SF: onMessageReceived(INVALIDATE)
+    SF->>SF: handleMessageInvalidate()
+    SF->>SF: latchBuffers()
+    SF->>SF: updateLayerStack()
+    SF->>SF: onMessageReceived(REFRESH)
+    SF->>SF: composite()
+```
 
-- 几何图元绘制。
-- 文本绘制。
-- 图片绘制。
-- save/restore 状态管理。
-- clip 与变换。
-- layer 与离屏缓冲控制。
-- functor 和特殊 drawable。
+### 13.5.3 CompositionEngine
 
-### 13.6.4 RenderNode：View 树的镜像
-
-`RenderNode` 是 View 树在 native 渲染层的镜像节点。每个重要 View 或绘制单元都可对应一个 RenderNode，节点保存绘制命令和属性。
-
-### 13.6.5 双缓冲属性
-
-RenderNode 属性采用双缓冲模型：UI Thread 更新 staging/current 属性，RenderThread 在同步阶段获取稳定快照。这避免 UI 与渲染并发访问时的锁竞争和不一致。
-
-### 13.6.6 RenderProperties：完整属性集合
-
-RenderProperties 包含：位置、尺寸、变换矩阵、pivot、rotation、scale、translation、alpha、elevation、clip、outline、shadow、layer type、color transform 等。
-
-### 13.6.7 LayerProperties 与 Layer Promotion
-
-某些节点可提升为独立 layer 进行离屏绘制。这对动画、alpha 变化、复杂重绘和 stretch/blur 等效果很重要。Layer promotion 能减少重绘区域，但会增加显存和合成开销。
-
-### 13.6.8 DisplayList：记录的命令流
-
-DisplayList 是 HWUI 记录阶段的结果。它把绘图操作编码为一组可快速回放的命令，供 RenderThread 在后续帧中重用或局部更新。
-
-### 13.6.9 Skia Display List 管线
-
-现代 HWUI 使用基于 Skia 的 display list 管线，把记录阶段生成的命令在渲染阶段映射到 `SkCanvas` 操作。这样 HWUI 既保留 Android UI 的场景图模型，又复用 Skia 的成熟后端。
+Android 10 引入了 `CompositionEngine`，将合成逻辑从 SurfaceFlinger 主类中分离。它负责计算输出目标（Display）、管理 Layer 状态，并决定 Layer 是通过 HWC 还是客户端（GPU）合成。
 
 ---
 
-## 13.7 RenderThread
+## 13.6 HWUI (Hardware UI)
 
-### 13.7.1 专用渲染线程
+### 13.6.1 HWUI 架构与 RenderNode
 
-RenderThread 是每个进程中专用的 GPU 渲染线程。它负责同步 RenderNode 状态、管理图形上下文、执行帧绘制、维护缓存，并与 SurfaceFlinger 的 present 路径对接。
+HWUI 位于 `frameworks/base/libs/hwui/`。`RenderNode` 是 View 在 native 层的镜像，存储了 `RenderProperties` 和记录绘制操作的 `DisplayList`。
 
-### 13.7.2 初始化
+### 13.6.2 帧生命周期 (Frame Lifecycle)
 
-RenderThread 初始化包括创建 Looper、选择渲染管线、初始化 `EglManager` 或 `VulkanManager`、建立 cache manager 和 frame callback 机制。
+1. **Recording**: UI 线程将绘制操作录制到 `DisplayList`。
+2. **Sync**: UI 线程将 `DisplayList` 同步到 `RenderThread`。
+3. **Render**: `RenderThread` 执行 `DisplayList`，生成 GPU 命令。
+4. **Swap**: 提交完成渲染的 buffer。
 
-### 13.7.3 线程循环
+---
 
-RenderThread 的循环负责处理任务队列、frame callback、纹理回收、异步缓存预热和 context 生命周期事件。核心绘制任务通常以 `DrawFrameTask` 形式进入队列。
+## 13.7 Hardware Composer (HWC)
 
-### 13.7.4 VSYNC 集成
+### 13.7.1 HWC HAL 作用
 
-RenderThread 与 `Choreographer`、frame timeline 和 VSYNC 信号紧密集成。UI Thread 按 VSYNC 驱动布局和记录，RenderThread 在同步后尽快开始 GPU 命令生成，并努力在 display deadline 前完成提交。
+HWC 通过专用硬件平面合并图层以减少 GPU 负载。其核心流程包括发送图层（Identify）、标记合成类型（Validate，如 `HWC_FRAMEBUFFER` 或 `HWC_OVERLAY`）和呈现显示（Present）。
 
-### 13.7.5 EglManager
+---
 
-`EglManager` 管理 EGL display、config、context 和 surface。它负责上下文创建、窗口 surface 绑定、buffer swap、fence 同步和错误恢复，是 SkiaGL pipeline 的关键支撑组件。
+## 13.8 显示管理 (Display Management)
 
-### 13.7.6 VulkanManager
+### 13.8.1 DisplayDevice 与 VSYNC
 
-`VulkanManager` 管理 Vulkan instance、device、queue、surface 和 swapchain，服务于 SkiaVulkan pipeline。它还负责与 Android surface、AHardwareBuffer 和同步原语的适配。
+SurfaceFlinger 维护 `DisplayDevice` 实例。VSYNC 通过 `VsyncReactor` 预测并调度。
 
-### 13.7.7 CacheManager
+---
 
-`CacheManager` 管理纹理缓存、路径缓存、图片解码缓存、shader cache 等图形缓存。缓存命中可以显著降低帧内 CPU/GPU 工作量。
+## 13.9 高级主题
 
-### 13.7.8 GPU Context 生命周期
+### 13.9.1 广色域与 HDR
 
-GPU context 可能在应用进入后台、显存压力升高、Surface 销毁或驱动错误时被释放。RenderThread 需要支持 context 丢失后的资源重建和惰性恢复。
+Android 图形栈支持 P3 色域和 HDR。色彩管理由合成阶段处理，SF 或 HWC 执行 tone mapping。
+
+### 13.10 受保护的内容 (Protected Buffers)
+
+用于 DRM 视频。标记为 `GRALLOC_USAGE_PROTECTED`，CPU 无法读取。
+
+### 13.11 渲染调试工具
+
+- **Winscope**: 捕获 SF 和 WM 状态。
+- **Perfetto**: 全系统耗时分析。
+- **Gapid**: GPU 命令流分析。
 
 ---
 

@@ -1009,7 +1009,7 @@ DittoSuite 也是 Android 测试生态中的一类专用 suite，面向特定领
 
 从工程视角看，suite 本质上是在同一套 TradeFed 与构建基础设施上，按不同产品边界组织出来的测试平面。
 
-## 55.17 Try It: Write Tests at Every Level
+## 55.17 动手实践：在各层编写测试
 
 ### 55.17.1 练习 1：Host-Side Unit Test（`cc_test_host`）
 
@@ -1121,7 +1121,7 @@ flowchart TD
 5. 用 `--test-mapping` 跑与改动最相关的测试。
 6. 在初次构建后可用 `--steps test` 只重跑执行阶段。
 
-## Summary
+## 小结
 
 Android 的测试基础设施本质上是一套跨构建系统、执行 harness、suite、语言框架和 CI 的平台工程。
 
@@ -1135,7 +1135,7 @@ Android 的测试基础设施本质上是一套跨构建系统、执行 harness�
 
 最实用的工程结论只有一句：先把能下沉到 host 的测试尽量下沉，再把真正依赖设备、系统边界和 UI 的部分交给 device / suite 测试处理。这样才能同时兼顾速度、稳定性和覆盖面。
 
-### Test Infrastructure Component Map
+### 测试基础设施组件图谱
 
 ```mermaid
 graph TB
@@ -1184,7 +1184,7 @@ graph TB
     Harness --> Frameworks
 ```
 
-### Quick Reference: Module Type Selection
+### 快速参考：模块类型选择
 
 | 我想测试…… | 语言 | 推荐模块类型 | 需要设备？ |
 |---|---|---|---|
@@ -1206,7 +1206,7 @@ graph TB
 | 窗口转场 | Java | Flicker 相关库 | 是 |
 | 视觉回归 | Java | Screenshot 测试 | 是 |
 
-### Key Source Files Referenced
+### 关键源码文件参考
 
 | 文件 | 关联主题 |
 |---|---|
