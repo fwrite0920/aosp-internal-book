@@ -2207,14 +2207,776 @@ maintain the selected contrast ratio.
 
 ---
 
-## 47.13  Keyguard Deep Dive
+## 47.13  Window Manager Shell Deep Dive
+
+Section 47.1.2 mentioned that SystemUI receives "shell interfaces" — `Pip`,
+`SplitScreen`, `Bubbles`, `ShellTransitions` — from a separate Dagger
+subcomponent called `WMComponent`. That subcomponent and the code behind
+those interfaces live in their own AOSP library at `frameworks/base/libs/WindowManager/Shell`,
+called *WM Shell* throughout the codebase (Java package
+`com.android.wm.shell`). This section walks through what WM Shell is, how it
+integrates with SystemUI, and how its per-feature subpackages map to the
+multi-window experiences a user sees on screen.
+
+### 47.13.1  Shell Is a Library, Not a Process
+
+The name "shell" can mislead. WM Shell does **not** run as a separate
+process — there is no `wm_shell` entry in `ps`. It is a Java library
+(`wm_shell-sources` filegroup in `frameworks/base/libs/WindowManager/Shell/Android.bp`)
+that the SystemUI APK statically links and loads into its own process. The
+"shell" name reflects its conceptual role: a shell *around* the
+`WindowManagerService` core, providing the policy and UI for windowing
+features without bloating `system_server`.
+
+This division has a concrete reason. Multi-window UX (PIP windows, split
+view dividers, freeform window decorations, bubble badges) needs to render
+Views, listen to gestures, and react to configuration changes — work that
+naturally belongs in a foreground UI process rather than the system server.
+SystemUI is already a long-lived foreground process with rendering, input,
+and IPC plumbing in place, so the Shell library piggy-backs on it. On Wear,
+TV, or Auto, a different SystemUI variant links a different form-factor
+Shell module (see 47.13.7), but the loading mechanism is the same.
+
+```mermaid
+flowchart LR
+    subgraph SystemServer["system_server process"]
+        WMS["WindowManagerService<br/>(window tree, layout)"]
+        ATM["ActivityTaskManagerService"]
+        ITaskOrg["ITaskOrganizerController<br/>(Binder)"]
+        WMS --> ITaskOrg
+        ATM --> WMS
+    end
+    subgraph SystemUI["systemui process"]
+        WMComponent["WMComponent<br/>(Dagger subcomponent)"]
+        ShellInterface["ShellInterface<br/>(lifecycle facade)"]
+        ShellTaskOrg["ShellTaskOrganizer<br/>(extends TaskOrganizer)"]
+        Features["pip/<br/>splitscreen/<br/>bubbles/<br/>freeform/<br/>desktopmode/<br/>onehanded/<br/>recents/<br/>transition/<br/>startingsurface"]
+        SysUI["SysUI components<br/>(WMShell adapter, QS, NotifShade, ...)"]
+        WMComponent --> ShellInterface
+        WMComponent --> ShellTaskOrg
+        WMComponent --> Features
+        ShellInterface --> SysUI
+        Features --> SysUI
+    end
+    ShellTaskOrg <-.Binder.-> ITaskOrg
+```
+
+The right-hand process loads the entire Shell library; the left-hand
+process owns the source of truth for what windows exist. They communicate
+through one Binder interface (`ITaskOrganizerController`) plus a handful of
+event listeners.
+
+### 47.13.2  WMComponent: Shell's Dagger Boundary
+
+WM Shell exposes a strict surface to SystemUI through the `WMComponent`
+Dagger subcomponent:
+
+```java
+// Source: frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/
+//   dagger/WMComponent.java:56
+@WMSingleton
+@Subcomponent(modules = {WMShellModule.class})
+public interface WMComponent {
+
+    default void init() {
+        getShell().onInit();
+    }
+
+    // Interfaces provided to SysUI
+    @WMSingleton ShellInterface getShell();
+    @WMSingleton Optional<OneHanded> getOneHanded();
+    @WMSingleton Optional<Pip> getPip();
+    @WMSingleton Optional<SplitScreen> getSplitScreen();
+    @WMSingleton Optional<Bubbles> getBubbles();
+    @WMSingleton Optional<TaskViewFactory> getTaskViewFactory();
+    @WMSingleton ShellTransitions getShellTransitions();
+    @WMSingleton KeyguardTransitions getKeyguardTransitions();
+    @WMSingleton Optional<StartingSurface> getStartingSurface();
+    @WMSingleton Optional<DisplayAreaHelper> getDisplayAreaHelper();
+    @WMSingleton Optional<RecentTasks> getRecentTasks();
+    @WMSingleton Optional<BackAnimation> getBackAnimation();
+    @WMSingleton Optional<DesktopMode> getDesktopMode();
+    @WMSingleton Optional<AppZoomOut> getAppZoomOut();
+    @WMSingleton Optional<AppHandles> getAppHandles();
+    // ... plus a few injector methods for field injection
+}
+```
+
+Two design rules show in this signature:
+
+- **Almost everything is `Optional<>`**. PIP only exists on form factors
+  that allow it. Split-screen is absent on watches. `RecentTasks` is
+  present on phones but consumed by Launcher, not SystemUI directly.
+  Wrapping every feature in `Optional` lets the same SystemUI codebase
+  build across phones, tablets, TV, Wear, and Auto.
+- **The component lists Dagger *modules*, not classes**. `WMComponent`
+  installs `WMShellModule`. The TV variant `TvWMComponent` installs
+  `TvWMShellModule` instead, which binds different implementations of the
+  same `Pip` / `Bubbles` / etc. interfaces. The interface contract with
+  SystemUI is identical; the implementation is form-factor specific.
+
+The `@WMSingleton` scope ensures each feature gets exactly one instance
+per Shell. `WMSingleton` is a custom Dagger scope defined in
+`WMSingleton.java` — it is *not* `@Singleton`, because the SysUI side has
+its own `@SysUISingleton`, and the two scopes need to coexist in the same
+process without colliding.
+
+### 47.13.3  ShellInterface: The Lifecycle Facade
+
+Most features live behind their own type, but the Shell as a whole is
+exposed through a single facade called `ShellInterface`:
+
+```java
+// Source: frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/
+//   sysui/ShellInterface.java:34
+public interface ShellInterface {
+    default void onInit() {}
+    default void onConfigurationChanged(Configuration newConfiguration) {}
+    default void onKeyguardVisibilityChanged(boolean visible, boolean occluded,
+            boolean animatingDismiss) {}
+    default void onKeyguardDismissAnimationFinished() {}
+    default void onUserChanged(int newUserId, @NonNull Context userContext) {}
+    default void onUserProfilesChanged(@NonNull List<UserInfo> profiles) {}
+    default void addDisplayImeChangeListener(DisplayImeChangeListener listener,
+            Executor executor) {}
+    default void removeDisplayImeChangeListener(DisplayImeChangeListener listener) {}
+    // ... handles shell commands, dumps, etc.
+}
+```
+
+The interface mirrors the lifecycle events SystemUI already tracks
+(keyguard visibility, user changes, configuration changes, IME position).
+The implementation is `ShellController`, which fans these events out to
+each registered Shell feature.
+
+This shape means the Shell does not poll SystemUI; SystemUI *pushes*
+state changes. The SysUI-side adapter is `com.android.systemui.wmshell.WMShell`,
+a `@SysUISingleton CoreStartable` whose `start()` method wires every
+SystemUI signal SystemUI emits — `KeyguardStateController`,
+`WakefulnessLifecycle`, `ConfigurationController`, `UserTracker`,
+`CommandQueue` — to the corresponding `ShellInterface` method.
+
+### 47.13.4  ShellInit: Ordered Initialization
+
+A library injected by Dagger has a known *construction* order (driven by
+the dependency graph), but Dagger does not guarantee a known
+*initialization* order. `ShellInit` adds that guarantee:
+
+```java
+// Source: frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/
+//   sysui/ShellInit.java:62
+public <T extends Object> void addInitCallback(Runnable r, T instance) {
+    if (mHasInitialized) {
+        if (Build.isDebuggable()) {
+            // All callbacks must be added prior to the Shell being initialized
+            throw new IllegalArgumentException("Can not add callback after init");
+        }
+        return;
+    }
+    final String className = instance.getClass().getSimpleName();
+    mInitCallbacks.add(new Pair<>(className, r));
+    ProtoLog.v(WM_SHELL_INIT, "Adding init callback for %s", className);
+}
+
+@VisibleForTesting
+public void init() {
+    ProtoLog.v(WM_SHELL_INIT, "Initializing Shell Components: %d", mInitCallbacks.size());
+    SurfaceControl.setDebugUsageAfterRelease(true);
+    // Init in order of registration
+    for (int i = 0; i < mInitCallbacks.size(); i++) {
+        final Pair<String, Runnable> info = mInitCallbacks.get(i);
+        final long t1 = SystemClock.uptimeMillis();
+        info.second.run();
+        final long t2 = SystemClock.uptimeMillis();
+        ProtoLog.v(WM_SHELL_INIT, "\t%s init took %dms", info.first, (t2 - t1));
+    }
+    mInitCallbacks.clear();
+    mHasInitialized = true;
+}
+```
+
+Each Shell component injects `ShellInit` in its constructor and calls
+`addInitCallback(this::onInit, this)`. Because Dagger constructs the
+graph leaves-first, the callbacks land in dependency order
+automatically. When `WMComponent.init()` later fires `getShell().onInit()`,
+`ShellController` calls `ShellInit.init()`, which drains the queue in
+registration order. The per-component init time is logged through
+ProtoLog (see 47.13.10) so regressions in Shell start-up cost show up in
+traces.
+
+In debug builds, adding a callback after `init()` throws. This is a
+deliberate guard: late init usually means a feature got constructed
+through lazy injection on the main thread instead of at component
+build-time, which would defeat the dependency-ordered startup.
+
+### 47.13.5  ShellTaskOrganizer: The Bridge to WindowManager
+
+Shell features need to *observe* and *manipulate* the system's task tree:
+PIP needs to know when a task enters picture-in-picture mode,
+split-screen needs to reparent tasks under its divider, transitions need
+to inspect what just appeared. `system_server`'s
+`ActivityTaskManagerService` exposes that observation surface through the
+`TaskOrganizer` API, and `ShellTaskOrganizer` is the Shell's single
+implementation of it:
+
+```java
+// Source: frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/
+//   ShellTaskOrganizer.java:90
+public class ShellTaskOrganizer extends TaskOrganizer {
+    // ...
+    public ShellTaskOrganizer(ShellInit shellInit, /* ... */) {
+        super(/* ... */);
+        // wait to register until Transitions is initialized
+        shellInit.addInitCallback(this::onInit, this);
+    }
+
+    @Override
+    public List<TaskAppearedInfo> registerOrganizer() {
+        synchronized (mLock) {
+            final List<TaskAppearedInfo> taskInfos = super.registerOrganizer();
+            // ... rebroadcast current tasks to Shell listeners
+            return taskInfos;
+        }
+    }
+}
+```
+
+`TaskOrganizer` is an AOSP-internal Binder interface. When the Shell
+calls `registerOrganizer()`, `system_server` starts pushing
+`onTaskAppeared` / `onTaskInfoChanged` / `onTaskVanished` callbacks back
+to the Shell process. The Shell maintains a single registration —
+features like PIP and split-screen don't each register their own
+`TaskOrganizer`; they subscribe to `ShellTaskOrganizer` via per-feature
+listener interfaces. That keeps the IPC channel narrow and avoids
+duplicate notifications for the same window event.
+
+### 47.13.6  Per-Feature Subpackages
+
+The Shell groups each multi-window experience under its own package. The
+following table maps the visible features to their source locations:
+
+| Package under `com.android.wm.shell.` | What the user sees |
+|---------------------------------------|---------------------|
+| `pip/`, `pip2/` | Picture-in-picture video windows. `pip2` is the staged rewrite of the legacy `pip` package. |
+| `splitscreen/` | Side-by-side or top-bottom split with the central drag divider. |
+| `bubbles/` | Floating conversation bubbles + the bubble bar. |
+| `freeform/` | Free-floating, resizable windows on large screens. |
+| `desktopmode/` | Connected-display desktop with multiple visible app windows. |
+| `onehanded/` | One-handed mode that drags the screen contents downward. |
+| `back/` | Predictive back animation (system & cross-activity). |
+| `transition/` | Cross-activity / cross-task transitions driven by Shell. |
+| `startingsurface/` | App splash screens and snapshot starting windows. |
+| `recents/` | Recent-tasks data feed to Launcher. |
+| `windowdecor/` | Title bars / handles on freeform & desktop windows. |
+| `compatui/` | Restart-for-resize and aspect-ratio-mismatch buttons. |
+| `taskview/` | The `TaskView` reusable view that hosts a task inside another window. |
+| `unfold/` | Foldable unfold/fold animation pipeline. |
+| `activityembedding/` | Jetpack ActivityEmbedding host-side support. |
+| `keyguard/` | `KeyguardTransitions` — Shell's slice of keyguard show/hide animations. |
+| `apptoweb/` | Web-link launch helpers for embedded browsing. |
+| `appzoomout/` | Zoomed-out app overview used by Recents. |
+| `hidedisplaycutout/` | Lets apps opt the cutout into a black bar. |
+| `crashhandling/` | Surface-level crash overlay during AppCrash. |
+
+Each subpackage owns its model, its UI (often a Compose or View tree
+that renders inside a Shell-owned window), and its public interface in
+`WMComponent`. Cross-package interactions go through Shell-internal
+contracts (`Transitions`, `ShellTaskOrganizer` listeners,
+`ShellController` callbacks) rather than direct calls — the same
+isolation discipline that keeps `WMComponent`'s surface minimal applies
+inside the library too.
+
+### 47.13.7  Form-Factor Variants: WMShellModule vs TvWMShellModule
+
+The same `WMComponent` interface is satisfied by different Dagger
+modules depending on the build target. The largest module is
+`WMShellModule` (~phone/tablet/foldable behaviour); TV builds substitute
+`TvWMShellModule`, which binds TV-specific PIP, TV-style transitions,
+and disables features that do not apply (split-screen, freeform). The
+TV variant is selected through `TvWMComponent`:
+
+```blueprint
+// Conceptually:
+//   WMComponent       includes WMShellModule
+//   TvWMComponent     includes TvWMShellModule
+```
+
+A SystemUI build picks one or the other based on its product flavour.
+Wear and Auto plug in their own variants the same way. OEMs that ship a
+custom form factor (Chromebook, AR headset, …) typically add another
+Subcomponent rather than forking the Shell library, because every
+variant still benefits from upstream feature work going into the base
+`WMShellModule`.
+
+The base module `WMShellBaseModule` is shared across variants and runs
+to ~1200 lines: it binds the transports (`ShellExecutor`,
+`HandlerThread`, `Choreographer`), the cross-cutting services
+(`ShellInit`, `ShellController`, `ShellCommandHandler`,
+`ProtoLogController`, `ShellTaskOrganizer`, `Transitions`,
+`DisplayController`), and a long list of providers for things every form
+factor needs (back animation, drag-and-drop, splash screens, IME
+position tracking).
+
+### 47.13.8  Transitions: Driving Animations from Shell
+
+Pre-Android-12, cross-activity animations were driven by
+`system_server` with hardcoded animations baked into
+`WindowManagerService`. The modern model moves the *animation
+implementation* into Shell, while `system_server` still owns the
+*decision* to start an animation. The plumbing lives in
+`com.android.wm.shell.transition.Transitions`:
+
+- `system_server` calls `IShellTransitions#onTransitionReady(...)` over
+  Binder, handing the Shell a `TransitionInfo` that lists the windows
+  appearing / disappearing / changing.
+- `Transitions` matches the info against registered `TransitionHandler`s
+  in priority order. The first handler that accepts becomes the animator
+  for that transition.
+- The handler manipulates `SurfaceControl`s and runs animators on the
+  Shell main thread. When the animation finishes, the Shell calls
+  `finishTransition(...)` back to `system_server`, which then applies
+  the queued `WindowContainerTransaction`.
+
+Each feature that wants custom motion (PIP enter/exit, split-screen
+divider drag, desktop window animate, predictive back) registers its own
+`TransitionHandler`. The Shell's central `DefaultTransitionHandler` is
+the fallback when nothing else handles the transition.
+
+`ShellTransitions` is the small interface SystemUI receives through
+`WMComponent` (`getShellTransitions()`); it exposes only the hooks that
+SystemUI needs (e.g. registering its own handlers for shade and keyguard
+animations) and hides the internals.
+
+### 47.13.9  TaskView: Embedding a Task in a View
+
+`taskview/` provides one of the Shell's most reused primitives: a
+`TaskView` that hosts a real task inside a regular `View`. Bubbles use
+it to render the conversation app inside the expanded bubble window.
+Settings panels use it for embedded preferences. Apps with the
+right permission use it for trusted overlays.
+
+Internally, `TaskViewFactory` is the `@WMSingleton` factory exposed
+through `WMComponent`. It creates `TaskViewTaskController` and a
+`SurfaceControl`-backed `TaskView` View, registers the task with
+`ShellTaskOrganizer`, and re-parents its surface under the View when
+the task appears. Resize and bounds updates flow through
+`WindowContainerTransaction`s back to `system_server`. The visible
+result is that a single child View shows another app's UI while the
+host process still owns input dispatch above the surface.
+
+### 47.13.10  ProtoLog: Build-Time Log Transformation
+
+Shell logging is unusual: it does not call `Log.d(TAG, ...)` directly.
+Instead, every log call goes through `ProtoLog`, and a build-time tool
+(`protologtool`, defined in `Android.bp`) rewrites the calls into a
+compact binary form. The rewrite is driven by `ShellProtoLogGroup` and
+the `wm_shell_protolog-groups` Java library.
+
+```blueprint
+// Source: frameworks/base/libs/WindowManager/Shell/Android.bp:65
+java_genrule {
+    name: "wm_shell_protolog_src",
+    srcs: [
+        ":protolog-impl",
+        ":wm_shell-sources",
+        ":wm_shell_protolog-groups",
+    ],
+    tools: ["protologtool"],
+    cmd: "$(location protologtool) transform-protolog-calls " +
+        "--protolog-class com.android.internal.protolog.ProtoLog " +
+        "--loggroups-class com.android.wm.shell.protolog.ShellProtoLogGroup " +
+        "--loggroups-jar $(location :wm_shell_protolog-groups) " +
+        "--viewer-config-file-path /system_ext/etc/wmshell.protolog.pb " +
+        "--output-srcjar $(out) " +
+        "$(locations :wm_shell-sources)",
+    out: ["wm_shell_protolog.srcjar"],
+}
+```
+
+The build emits two artefacts:
+
+- A `.srcjar` of *rewritten* Shell sources, where each `ProtoLog.v(GROUP, "format", args)`
+  becomes a numeric ID plus its arg values, dropping the format string
+  from the runtime binary.
+- `wmshell.protolog.pb` (installed into `/system_ext/etc/`), a
+  protobuf-encoded map from log ID back to format string.
+
+This split keeps Shell log statements cheap (one ID + args, no string
+work in the hot path) while still letting `dumpsys` and trace tools
+reconstruct human-readable lines on demand. Chapter 56's tracing section
+covers ProtoLog in detail; for Shell purposes, the key point is that
+`grep`ing the Shell source for human log text returns the
+*pre-transform* code, which is what developers read and review.
+
+### 47.13.11  The Jetpack Half (libs/WindowManager/Jetpack)
+
+The sibling `frameworks/base/libs/WindowManager/Jetpack/` directory is
+*not* part of the Shell library. It implements
+`androidx.window.extensions.*` — the platform side of the AndroidX
+`WindowManager` Jetpack library — and ships as `androidx.window.extensions`
+on the device. Apps that depend on `androidx.window` (foldable posture
+APIs, ActivityEmbedding, area extensions) talk to this extensions APK,
+which in turn talks to the platform.
+
+Source: `frameworks/base/libs/WindowManager/Jetpack/src/androidx/window/extensions/`
+(`WindowExtensionsImpl.java`, `WindowExtensionsProvider.java`, plus
+`area/`, `bubble/`, `embedding/`, `layout/`, `util/` subpackages).
+
+The two libraries share a parent directory because they share a domain
+(WindowManager-adjacent client code) and historically share contributors,
+but they are otherwise independent: the Shell runs inside SystemUI; the
+Jetpack extensions library is loaded into each app's process via the
+extensions discovery API.
+
+### 47.13.12  How SystemUI Talks Back to Shell: The WMShell CoreStartable
+
+The SystemUI side has a single adapter that wires SystemUI's state into
+Shell's listeners:
+
+```java
+// Source: frameworks/base/packages/SystemUI/src/com/android/systemui/wmshell/
+//   WMShell.java:99
+@SysUISingleton
+public final class WMShell implements CoreStartable, CommandQueue.Callbacks {
+    // Injected: ShellInterface, Optional<Pip>, Optional<SplitScreen>,
+    //           Optional<Bubbles>, Optional<OneHanded>, Optional<RecentTasks>,
+    //           Optional<DesktopMode>, KeyguardStateController,
+    //           WakefulnessLifecycle, ConfigurationController, ...
+}
+```
+
+The class JavaDoc states the explicit ordering rule:
+
+> SysUI application starts
+>  → SystemUIFactory is initialized
+>    → WMComponent is created
+>    → SysUIComponent is created (with WMComponents injected)
+>  → SysUI services are started
+>    → WMShell starts and binds SysUI with Shell components via exported Shell interfaces
+
+In other words: the entire Shell graph is built and initialized *before*
+any SysUI `CoreStartable` runs. By the time `WMShell.start()` fires,
+every Shell feature is ready to receive callbacks. `WMShell` then
+subscribes to the SystemUI lifecycle controllers and forwards each
+change into the corresponding `ShellInterface` / per-feature method
+(e.g. `KeyguardStateController` → `mShellInterface.onKeyguardVisibilityChanged(...)`,
+`UserTracker` → `mShellInterface.onUserChanged(...)`).
+
+### 47.13.13  Key Source Files Reference (WM Shell)
+
+| File | Purpose |
+|------|---------|
+| `frameworks/base/libs/WindowManager/Shell/Android.bp` | Module definitions, ProtoLog genrules, form-factor variants |
+| `frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/dagger/WMComponent.java` | Dagger subcomponent — Shell's public surface |
+| `frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/dagger/WMShellBaseModule.java` | Cross-form-factor base bindings (~1200 lines) |
+| `frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/dagger/WMShellModule.java` | Phone/tablet form-factor bindings |
+| `frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/dagger/TvWMShellModule.java` | TV form-factor bindings |
+| `frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/sysui/ShellInterface.java` | Lifecycle facade SysUI calls into |
+| `frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/sysui/ShellController.java` | Implementation of `ShellInterface` — event fan-out |
+| `frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/sysui/ShellInit.java` | Ordered init callback registry |
+| `frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/ShellTaskOrganizer.java` | Single `TaskOrganizer` registration; per-feature listeners |
+| `frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/transition/Transitions.java` | Transition handler registry and dispatch |
+| `frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/protolog/ShellProtoLogGroup.java` | ProtoLog group enum, transformed at build time |
+| `frameworks/base/packages/SystemUI/src/com/android/systemui/wmshell/WMShell.java` | SysUI-side adapter `CoreStartable` |
+| `frameworks/base/libs/WindowManager/Jetpack/src/androidx/window/extensions/` | Jetpack window extensions APK (separate from Shell) |
+
+---
+
+## 47.14  Low-Light Dream Library
+
+Sections 47.5 and (later) 47.15 mention the `DREAMING` keyguard state — the
+period where a `DreamService` (Android's screensaver mechanism, often called
+a *daydream*) is showing on top of the lock screen. The system dream is
+chosen by `DreamManagerService`, but on form factors that want to switch to
+a *different* dream in low ambient light — typically a dim, clock-only
+screensaver on a smart display, tablet, or Hub — the choice is mediated by
+a small library at `frameworks/base/libs/dream/lowlight/`, packaged as
+`LowLightDreamLib` and linked into SystemUI variants that need it.
+
+This section walks through the library's surface, the state machine it
+implements, and how SystemUI's `LowLightMonitor` consumes it.
+
+### 47.14.1  What the Library Owns and What It Does Not
+
+`LowLightDreamLib` is intentionally narrow. It owns:
+
+- The three-value ambient-light enum (`AMBIENT_LIGHT_MODE_UNKNOWN`,
+  `AMBIENT_LIGHT_MODE_REGULAR`, `AMBIENT_LIGHT_MODE_LOW_LIGHT`).
+- The "transition coordinator" that lets other SystemUI components run
+  animations *before* the dream swap.
+- The Dagger plumbing that lets a host SystemUI variant inject a
+  `ComponentName?` for "the dream to show when it's dark".
+
+It does **not** own:
+
+- Ambient-light sensing. The host provides the sensor reading.
+- The dream UI itself. The host (or an OEM-supplied APK) implements
+  the `DreamService` whose `ComponentName` is wired through Dagger.
+- The base "regular" dream. `DreamManagerService` chooses that from the
+  per-user `Settings.Secure.SCREENSAVER_COMPONENTS` list — the library
+  only overrides via `setSystemDreamComponent`.
+
+Source layout (~5 source files, ~250 lines):
+
+```
+frameworks/base/libs/dream/lowlight/
+  src/com/android/dream/lowlight/
+    LowLightDreamManager.kt          -- core 3-mode state machine
+    LowLightTransitionCoordinator.kt -- enter/exit animation hooks
+    util/{KotlinUtils.kt, TruncatedInterpolator.kt}
+    dagger/
+      LowLightDreamModule.kt          -- @Provides for timeout, scope, dispatcher
+      LowLightDreamComponent.kt       -- Subcomponent + Factory (host wires DreamManager + dream ComponentName)
+      qualifiers/{Application.kt, Main.kt}
+  res/values/config.xml               -- config_lowLightTransitionTimeoutMs (default 2000ms)
+```
+
+### 47.14.2  LowLightDreamManager: The 3-Mode State Machine
+
+`LowLightDreamManager` is the only public class with side effects. Its
+state is a single `@AmbientLightMode` int plus an in-flight transition
+`Job`:
+
+```kotlin
+// Source: frameworks/base/libs/dream/lowlight/src/com/android/dream/lowlight/
+//   LowLightDreamManager.kt:42
+class LowLightDreamManager @Inject constructor(
+    @Application private val coroutineScope: CoroutineScope,
+    private val dreamManager: DreamManager,
+    private val lowLightTransitionCoordinator: LowLightTransitionCoordinator,
+    @param:Named(LowLightDreamModule.LOW_LIGHT_DREAM_COMPONENT)
+    private val lowLightDreamComponent: ComponentName?,
+    @param:Named(LowLightDreamModule.LOW_LIGHT_TRANSITION_TIMEOUT_MS)
+    private val lowLightTransitionTimeoutMs: Long
+) {
+    @RequiresPermission(Manifest.permission.WRITE_DREAM_STATE)
+    fun setAmbientLightMode(@AmbientLightMode ambientLightMode: Int) {
+        if (lowLightDreamComponent == null) {
+            // ... log + bail. Host opted out of low-light dreams.
+            return
+        }
+        if (mAmbientLightMode == ambientLightMode) return
+        mAmbientLightMode = ambientLightMode
+        val shouldEnterLowLight = mAmbientLightMode == AMBIENT_LIGHT_MODE_LOW_LIGHT
+
+        mTransitionJob?.cancel()
+        mTransitionJob = coroutineScope.launch {
+            try {
+                lowLightTransitionCoordinator.waitForLowLightTransitionAnimation(
+                    timeout = mLowLightTransitionTimeout,
+                    entering = shouldEnterLowLight
+                )
+            } catch (ex: TimeoutCancellationException) {
+                Log.e(TAG, "timed out while waiting for low light animation", ex)
+            } catch (ex: CancellationException) {
+                Log.w(TAG, "low light transition animation cancelled")
+                // Catch the cancellation so that we still set the system dream component if the
+                // animation is cancelled, such as by a user tapping to wake as the transition to
+                // low light happens.
+            }
+            dreamManager.setSystemDreamComponent(
+                if (shouldEnterLowLight) lowLightDreamComponent else null
+            )
+        }
+    }
+}
+```
+
+Three details worth noting:
+
+- **`lowLightDreamComponent == null` is the opt-out.** Hosts that do not
+  want this feature bind the qualified `ComponentName?` to `null`. The
+  manager then short-circuits every call without ever touching
+  `DreamManager`. This is how the same SystemUI Dagger graph compiles
+  across products that have a low-light dream and those that don't.
+- **One in-flight transition at a time.** Each call cancels the previous
+  `mTransitionJob`. If the ambient sensor oscillates around the
+  threshold, you get *at most one* animation+`setSystemDreamComponent`
+  per stable interval.
+- **The animation is awaited, not raced.** The `coroutineScope.launch`
+  blocks on the coordinator's `waitForLowLightTransitionAnimation`
+  before swapping dreams. The swap happens *after* the host's enter/exit
+  animator completes — so a SystemUI Compose animation runs first, then
+  the dream cuts. The `CancellationException` branch deliberately falls
+  through to still call `setSystemDreamComponent`, so a "wake while
+  transitioning" still leaves the system in a coherent state instead of
+  half-transitioned.
+
+The `WRITE_DREAM_STATE` annotation reflects the underlying
+`DreamManagerService` permission: only the system UID and apps holding
+`android.permission.WRITE_DREAM_STATE` (a signature-or-system
+permission) can call this method, which matches the SystemUI process
+profile.
+
+### 47.14.3  LowLightTransitionCoordinator: Letting the Host Animate First
+
+A naked dream swap looks abrupt — the screen would cut from the regular
+dream (or the lock screen wallpaper) to the low-light dream with no
+fade. `LowLightTransitionCoordinator` lets the host register *one*
+enter listener and *one* exit listener, each of which returns an
+`Animator?`:
+
+```kotlin
+// Source: frameworks/base/libs/dream/lowlight/src/com/android/dream/lowlight/
+//   LowLightTransitionCoordinator.kt:30
+@Singleton
+class LowLightTransitionCoordinator @Inject constructor() {
+    interface LowLightEnterListener {
+        fun onBeforeEnterLowLight(): Animator?
+    }
+    interface LowLightExitListener {
+        fun onBeforeExitLowLight(): Animator?
+    }
+    // ... setLowLightEnterListener(...) / setLowLightExitListener(...)
+
+    suspend fun waitForLowLightTransitionAnimation(timeout: Duration, entering: Boolean) =
+        suspendCoroutineWithTimeout(timeout) { continuation ->
+            // ... call listener, listen on Animator.onAnimationEnd, resume continuation
+        }
+}
+```
+
+Two design choices stand out:
+
+- **One listener per direction.** The coordinator deliberately does
+  *not* support a list of subscribers. Stacking animations across
+  multiple subsystems would race in ways the dream swap can't recover
+  from. The host picks one orchestrator (usually a
+  `lowlightclock` UI controller in the SystemUI variant that owns the
+  low-light surface) and that orchestrator is responsible for fanning
+  out internally.
+- **Returning `null` means "no animation, swap immediately."** The
+  helper resumes the continuation synchronously when the listener
+  returns null, so a no-op host still gets the dream cut without an
+  extra event-loop hop.
+
+The 2000ms default timeout (`config_lowLightTransitionTimeoutMs`) is a
+floor: a stuck animation cannot block the dream forever, and
+`setAmbientLightMode` logs the timeout and proceeds with the swap.
+
+### 47.14.4  Dagger Wiring on the Host Side
+
+A SystemUI variant that wants the library injects a
+`LowLightDreamComponent.Factory` from its top-level component and
+provides the two values the library can't know: the system
+`DreamManager` and the dream `ComponentName?`.
+
+```kotlin
+// Source: frameworks/base/libs/dream/lowlight/src/com/android/dream/lowlight/
+//   dagger/LowLightDreamComponent.kt:25
+@Subcomponent(modules = [LowLightDreamModule::class])
+interface LowLightDreamComponent {
+    @Subcomponent.Factory
+    interface Factory {
+        fun create(
+            @BindsInstance dreamManager: DreamManager,
+            @Named(LowLightDreamModule.LOW_LIGHT_DREAM_COMPONENT)
+            @BindsInstance lowLightDreamComponent: ComponentName?
+        ): LowLightDreamComponent
+    }
+}
+```
+
+`LowLightDreamModule` then provides the rest from `Context` resources:
+
+```kotlin
+// Source: frameworks/base/libs/dream/lowlight/src/com/android/dream/lowlight/
+//   dagger/LowLightDreamModule.kt:35
+@Module
+object LowLightDreamModule {
+    @Provides @Named(LOW_LIGHT_TRANSITION_TIMEOUT_MS)
+    fun providesLowLightTransitionTimeout(context: Context): Long =
+        context.resources.getInteger(R.integer.config_lowLightTransitionTimeoutMs).toLong()
+
+    @Provides @Main
+    fun providesMainDispatcher(): CoroutineDispatcher = Dispatchers.Main.immediate
+
+    @Provides @Application
+    fun providesApplicationScope(@Main dispatcher: CoroutineDispatcher): CoroutineScope =
+        CoroutineScope(dispatcher)
+}
+```
+
+`@Named(LOW_LIGHT_DREAM_COMPONENT)` is the key seam. A product that
+defines a low-light dream points the binding at e.g.
+`com.example.systemui/.LowLightDream`; a product that does not want one
+binds `null`, and `LowLightDreamManager.setAmbientLightMode` becomes a
+no-op. The library compiles into every SystemUI flavour either way.
+
+### 47.14.5  Consumption Path: SystemUI's LowLightMonitor
+
+The consumer of the library in upstream AOSP is
+`com.android.systemui.lowlightclock.LowLightMonitor`. The monitor
+subscribes to whatever ambient-light source the SystemUI variant
+provides (vendor sensor service, light sensor, OEM cloud signal),
+maps that signal to one of the three enum values, and calls
+`lowLightDreamManager.setAmbientLightMode(mode)`. The library handles
+the rest:
+
+```mermaid
+flowchart LR
+    Sensor["Ambient light source<br/>(sensor / OEM service)"]
+    Monitor["LowLightMonitor<br/>(SystemUI)"]
+    Mgr["LowLightDreamManager<br/>(LowLightDreamLib)"]
+    Coord["LowLightTransitionCoordinator"]
+    HostUI["Host enter/exit listener<br/>(lowlightclock UI)"]
+    DM["DreamManager<br/>(DreamManagerService)"]
+    Dream["Low-light DreamService<br/>(per-product APK)"]
+
+    Sensor --> Monitor
+    Monitor --> Mgr
+    Mgr --> Coord
+    Coord --> HostUI
+    HostUI --> Coord
+    Mgr --> DM
+    DM --> Dream
+```
+
+Note that the host UI sits *behind* the coordinator — the library calls
+the host, not the other way around. That keeps the SystemUI listener
+purely reactive (it never asks "is it dark?") and concentrates the
+state in the manager.
+
+### 47.14.6  Where This Fits in the Wider Dream Story
+
+The library is intentionally agnostic about *what* the low-light dream
+shows. In practice these are minimal, dim, mostly-static surfaces —
+common patterns are a low-brightness clock, an album-art screensaver,
+or a date/weather panel. The point of swapping at the `DreamService`
+level instead of inside one dream is composition: the regular dream
+can be a third-party screensaver picked by the user, while the
+low-light dream is a system-controlled, high-contrast,
+low-power-budget surface. The library is the bridge that lets a SystemUI
+variant flip between them without forcing every dream to implement
+its own dim mode.
+
+For the broader screensaver / `DreamService` architecture (DreamManagerService,
+`DreamOverlayService`, doze + AOD interaction), see Chapter 47 §47.5
+(Lock Screen) and §47.15 (Keyguard Deep Dive), which trace the
+`DREAMING` state through the keyguard state machine.
+
+### 47.14.7  Key Source Files Reference (LowLightDreamLib)
+
+| File | Purpose |
+|------|---------|
+| `frameworks/base/libs/dream/lowlight/Android.bp` | `LowLightDreamLib` `android_library` module, declares Dagger compiler plugin |
+| `frameworks/base/libs/dream/lowlight/src/com/android/dream/lowlight/LowLightDreamManager.kt` | 3-mode state machine, calls `DreamManager.setSystemDreamComponent` |
+| `frameworks/base/libs/dream/lowlight/src/com/android/dream/lowlight/LowLightTransitionCoordinator.kt` | Enter/exit `Animator?` listener pair, coroutine `await` helper |
+| `frameworks/base/libs/dream/lowlight/src/com/android/dream/lowlight/dagger/LowLightDreamModule.kt` | `@Provides` for timeout, main dispatcher, application coroutine scope |
+| `frameworks/base/libs/dream/lowlight/src/com/android/dream/lowlight/dagger/LowLightDreamComponent.kt` | Dagger `@Subcomponent` host wires `DreamManager` + `ComponentName?` into |
+| `frameworks/base/libs/dream/lowlight/res/values/config.xml` | `config_lowLightTransitionTimeoutMs` (default 2000ms) |
+| `frameworks/base/packages/SystemUI/src/com/android/systemui/lowlightclock/LowLightMonitor.kt` | SystemUI consumer that converts sensor signal to `setAmbientLightMode` |
+
+---
+
+## 47.15  Keyguard Deep Dive
 
 Section 47.5 introduced the lock screen architecture.  This section explores
 the internal state machine, biometric unlock modes, bouncer flow, AOD
 transitions, and the MVI modernisation in much greater detail, drawing on the
 full keyguard source tree.
 
-### 47.13.1  Keyguard State Machine
+### 47.15.1  Keyguard State Machine
 
 The keyguard subsystem is fundamentally a state machine.  The
 `KeyguardState` enum defines all possible states:
@@ -2287,7 +3049,7 @@ States marked `@Deprecated` (`PRIMARY_BOUNCER`, `GLANCEABLE_HUB`, `GONE`,
 `OCCLUDED`) are being replaced by the Scene Container framework, which maps
 them to `UNDEFINED` and manages transitions through `SceneTransitionLayout`.
 
-### 47.13.2  Awake vs Asleep State Classification
+### 47.15.2  Awake vs Asleep State Classification
 
 The `KeyguardState` companion object classifies each state for power
 management:
@@ -2309,7 +3071,7 @@ management:
 This classification drives the `ThemeOverlayController` deferred-colour
 logic (section 47.12.6) and various power-dependent behaviours.
 
-### 47.13.3  KeyguardTransitionInteractor
+### 47.15.3  KeyguardTransitionInteractor
 
 `KeyguardTransitionInteractor` is the primary API for observing and driving
 transitions between keyguard states:
@@ -2349,7 +3111,7 @@ keyguardTransitionInteractor.transition(Edge.create(from = LOCKSCREEN, to = AOD)
     .collect { step -> /* animate based on step.value */ }
 ```
 
-### 47.13.4  Transition Interactor Hierarchy
+### 47.15.4  Transition Interactor Hierarchy
 
 Each state-to-state transition has a dedicated interactor:
 
@@ -2370,7 +3132,7 @@ user gestures) and call `startTransition()` on the repository to move the
 state machine forward.  The `StartKeyguardTransitionModule` wires them all
 into Dagger.
 
-### 47.13.5  KeyguardViewMediator Internals
+### 47.15.5  KeyguardViewMediator Internals
 
 `KeyguardViewMediator` (4,573 lines) remains the bridge between
 `system_server` and SystemUI's keyguard.  Key internal mechanisms:
@@ -2401,7 +3163,7 @@ The mediator tracks occlusion via `setOccluded(boolean)` and coordinates
 with `StatusBarKeyguardViewManager` to hide/show the underlying keyguard
 views.
 
-### 47.13.6  Biometric Unlock Modes
+### 47.15.6  Biometric Unlock Modes
 
 The `BiometricUnlockInteractor` translates integer mode constants from
 `BiometricUnlockController` into the typed `BiometricUnlockMode` enum:
@@ -2443,7 +3205,7 @@ graph TD
 The `BiometricUnlockModel` pairs the mode with a `BiometricUnlockSource`
 (FINGERPRINT_SENSOR, FACE_SENSOR, etc.) for audit and animation purposes.
 
-### 47.13.7  Bouncer Flow Detail
+### 47.15.7  Bouncer Flow Detail
 
 The bouncer subsystem uses the MVI pattern with a clear data/domain/UI
 separation:
@@ -2507,7 +3269,7 @@ bouncer presents a fingerprint icon overlay:
 4. If the user taps the sensor and fingerprint matches -> `GONE`
 5. If the user wants PIN instead -> `ALTERNATE_BOUNCER -> PRIMARY_BOUNCER`
 
-### 47.13.8  AOD Transition Pipeline
+### 47.15.8  AOD Transition Pipeline
 
 The Always-On Display transition involves multiple coordinated subsystems:
 
@@ -2545,7 +3307,7 @@ Doze parameters control AOD behaviour:
 - **DozeParameters.getPulseVisibleDuration()** -- how long notification
   pulse shows
 
-### 47.13.9  KeyguardRepository -- The Data Layer
+### 47.15.9  KeyguardRepository -- The Data Layer
 
 The `KeyguardRepository` interface centralises all keyguard state:
 
@@ -2572,7 +3334,7 @@ Key flows exposed by `KeyguardRepository`:
 - `isDreaming: StateFlow<Boolean>`
 - `wakefulness: StateFlow<WakefulnessModel>`
 
-### 47.13.10  Scene Container Migration
+### 47.15.10  Scene Container Migration
 
 The keyguard is undergoing a major migration to the Scene Container
 architecture.  Under this model:
@@ -2612,7 +3374,7 @@ keys:
 The `SceneContainerFlag` controls whether the new path is active, with
 `@Deprecated` annotations on states that will not exist post-migration.
 
-### 47.13.11  Key Source Paths (Keyguard)
+### 47.15.11  Key Source Paths (Keyguard)
 
 | Path | Description |
 |---|---|
@@ -2646,12 +3408,12 @@ The `SceneContainerFlag` controls whether the new path is active, with
 
 ---
 
-## 47.14  Try It: Add a Custom QS Tile
+## 47.16  Try It: Add a Custom QS Tile
 
 This hands-on exercise demonstrates how to add a new built-in Quick Settings
 tile to SystemUI.  We will create a "Caffeine" tile that keeps the screen awake.
 
-### 47.14.1  Step 1: Create the Tile Class
+### 47.16.1  Step 1: Create the Tile Class
 
 Create a new file in the tiles directory:
 
@@ -2777,7 +3539,7 @@ public class CaffeineTile extends QSTileImpl<BooleanState> {
 }
 ```
 
-### 47.14.2  Step 2: Register the Tile in the QS Factory
+### 47.16.2  Step 2: Register the Tile in the QS Factory
 
 The tile must be registered so `QSHost` can create it from its tile spec.
 Find the tile creation factory (typically in the QS Dagger module or
@@ -2798,7 +3560,7 @@ You also need to add the Dagger provider.  In the relevant Dagger module:
 abstract QSTile bindCaffeineTile(CaffeineTile tile);
 ```
 
-### 47.14.3  Step 3: Add Drawable Resources
+### 47.16.3  Step 3: Add Drawable Resources
 
 Add icon resources to the SystemUI `res/` directory:
 
@@ -2810,7 +3572,7 @@ frameworks/base/packages/SystemUI/res/drawable/
 
 For vector drawables, use 24x24dp with the appropriate tint.
 
-### 47.14.4  Step 4: Add to Default Tile List (Optional)
+### 47.16.4  Step 4: Add to Default Tile List (Optional)
 
 To include the tile in the default QS panel, modify the string resource:
 
@@ -2821,7 +3583,7 @@ To include the tile in the default QS panel, modify the string resource:
 </string>
 ```
 
-### 47.14.5  Step 5: Build and Test
+### 47.16.5  Step 5: Build and Test
 
 ```bash
 # Build SystemUI
@@ -2842,7 +3604,7 @@ Verify the tile appears in the QS editor.  If not in the default list, open
 the QS edit mode (pencil icon) and drag the "Caffeine" tile into the active
 area.
 
-### 47.14.6  Step 6: Verify Functionality
+### 47.16.6  Step 6: Verify Functionality
 
 ```bash
 # Check wake lock state
@@ -2852,7 +3614,7 @@ adb shell dumpsys power | grep -i "wake lock"
 # Look for: "SystemUI:CaffeineTile" in the output
 ```
 
-### 47.14.7  Architecture Summary of a QS Tile
+### 47.16.7  Architecture Summary of a QS Tile
 
 ```mermaid
 graph TD
@@ -2877,7 +3639,7 @@ graph TD
     QTV -->|"displayed in"| QSP
 ```
 
-### 47.14.8  Testing the Tile
+### 47.16.8  Testing the Tile
 
 For unit testing, follow the existing pattern in the SystemUI test directory:
 
