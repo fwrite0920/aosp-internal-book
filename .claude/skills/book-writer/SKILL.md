@@ -1,6 +1,9 @@
 ---
 name: book-writer
 description: Patterns for writing technical book chapters in Markdown with Mermaid diagrams, served via MkDocs. Use this skill whenever writing, editing, reviewing, adding, removing, or renaming book chapters, organizing multi-chapter content, fixing Mermaid rendering issues, or changing the book's structure. Also triggers when updating mkdocs.yml, docs/ symlinks, or navigation — even if the user just says "add a chapter" or "reorganize sections" without mentioning MkDocs.
+metadata:
+  author: 'utzcoz'
+  last-updated: '2026-05-25'
 ---
 
 # Book Writer
@@ -27,7 +30,7 @@ The book is served via MkDocs Material. When chapter content changes, the site c
    - [Chapter N: Title](https://aospbooks.github.io/aosp-internal-book/NN-slug/): one-line description of what the chapter covers
    ```
 5. If the chapter number changes existing chapters, renumber the affected `mkdocs.yml` entries and `llms.txt` URLs too
-6. Add the new chapter slug to `agents/_content/manifest.toml` under the right Part (and create a new Part entry there + `agents/_content/parts/<NN>-<slug>/SKILL.md` if the chapter belongs to a brand-new Part), then run `python3 agents/build.py` and commit the regenerated `agents/<platform>/` trees.
+6. Add the new chapter slug to `agents/_content/manifest.toml` under the right Part (and create a new Part entry there + `agents/_content/parts/<slug>/SKILL.md` if the chapter belongs to a brand-new Part), then run `python3 agents/build.py` and commit the regenerated `agents/<platform>/` trees.
 
 ### When you remove a chapter
 

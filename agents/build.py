@@ -11,6 +11,7 @@ the full design.
 from __future__ import annotations
 
 import argparse
+import datetime
 import filecmp
 import json
 import re
@@ -27,11 +28,21 @@ REPO_ROOT = SCRIPT_DIR.parent
 CONTENT_DIR = SCRIPT_DIR / "_content"
 MANIFEST_PATH = CONTENT_DIR / "manifest.toml"
 
+# Default author written into a SKILL.md frontmatter when the source file
+# does not specify one. New Part SKILL.md files inherit this on the first
+# normal build.
+DEFAULT_AUTHOR = "utzcoz"
+
+
+def today_iso() -> str:
+    """Return today's date as YYYY-MM-DD (used for SKILL.md last-updated)."""
+    return datetime.date.today().isoformat()
+
 
 @dataclass(frozen=True)
 class Part:
     """One Part-skill entry from the manifest."""
-    id: str          # e.g. "02-kernel-and-boot"
+    id: str          # e.g. "kernel-and-boot"
     roman: str       # e.g. "II"
     title: str       # e.g. "Kernel & Boot"
     chapters: list[str]  # chapter slugs, e.g. ["04-boot-and-init", ...]
@@ -93,15 +104,22 @@ def validate_chapters(manifest: Manifest) -> None:
 _FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)
 
 
-def parse_skill(text: str) -> tuple[dict[str, str], str]:
+def parse_skill(text: str) -> tuple[dict, str]:
     """Parse a SKILL.md file with YAML-style frontmatter.
 
-    The frontmatter is constrained to two keys:
+    Supported frontmatter keys:
       name: <single-line value>
       description: |
         <indented multi-line block scalar>
+      metadata:                       (optional)
+        author: <string>
+        last-updated: '<YYYY-MM-DD>'
 
-    Returns ({"name": ..., "description": ...}, body_after_frontmatter).
+    `name` and `description` are required. `metadata` is optional; when
+    present its sub-keys are read verbatim and any surrounding quotes
+    are stripped.
+
+    Returns ({"name": ..., "description": ..., "metadata": {...}}, body).
     """
     m = _FRONTMATTER_RE.match(text)
     if not m:
@@ -109,7 +127,7 @@ def parse_skill(text: str) -> tuple[dict[str, str], str]:
     fm = m.group(1)
     body = text[m.end():].lstrip("\n")
 
-    meta: dict[str, str] = {}
+    meta: dict = {"metadata": {}}
     lines = fm.split("\n")
     i = 0
     while i < len(lines):
@@ -133,9 +151,64 @@ def parse_skill(text: str) -> tuple[dict[str, str], str]:
             else:
                 meta["description"] = after_colon
                 i += 1
+        elif line.startswith("metadata:"):
+            i += 1
+            md: dict[str, str] = {}
+            while i < len(lines) and (lines[i].startswith("  ") or lines[i] == ""):
+                if not lines[i].strip():
+                    i += 1
+                    continue
+                sub = lines[i][2:]  # strip 2-space block indent
+                if ":" not in sub:
+                    raise ValueError(f"Unexpected metadata line: {lines[i]!r}")
+                k, v = sub.split(":", 1)
+                v = v.strip()
+                if len(v) >= 2 and v[0] == v[-1] and v[0] in ("'", '"'):
+                    v = v[1:-1]
+                md[k.strip()] = v
+                i += 1
+            meta["metadata"] = md
         else:
             raise ValueError(f"Unexpected SKILL.md frontmatter line: {line!r}")
+    if "name" not in meta:
+        raise ValueError("SKILL.md frontmatter missing required 'name' field")
+    if "description" not in meta:
+        raise ValueError("SKILL.md frontmatter missing required 'description' field")
     return meta, body
+
+
+def serialize_skill(meta: dict, body: str) -> str:
+    """Serialize parsed SKILL.md frontmatter + body back to text.
+
+    Emits frontmatter in a canonical order: `name`, `description` (block
+    scalar), then a `metadata:` block if any metadata keys are set. The
+    metadata block sorts `author` and `last-updated` first (for stable
+    diffs), then any remaining keys in insertion order. Mirrors the
+    format produced by generate_claude so that source files rewritten by
+    normalization stay byte-identical to freshly generated output.
+    """
+    md = meta.get("metadata") or {}
+    parts: list[str] = [
+        "---\n",
+        f"name: {meta['name']}\n",
+        "description: |\n",
+    ]
+    for line in meta["description"].split("\n"):
+        parts.append(f"  {line}\n" if line else "\n")
+    if md:
+        parts.append("metadata:\n")
+        ordered_keys: list[str] = []
+        for k in ("author", "last-updated"):
+            if k in md:
+                ordered_keys.append(k)
+        for k in md:
+            if k not in ordered_keys:
+                ordered_keys.append(k)
+        for k in ordered_keys:
+            parts.append(f"  {k}: '{md[k]}'\n")
+    parts.append("---\n\n")
+    parts.append(body)
+    return "".join(parts)
 
 
 def part_skill_path(part_id: str) -> Path:
@@ -143,14 +216,71 @@ def part_skill_path(part_id: str) -> Path:
     return CONTENT_DIR / "parts" / part_id / "SKILL.md"
 
 
-def load_part_skills(manifest: Manifest) -> dict[str, tuple[dict[str, str], str]]:
-    """Load every Part's SKILL.md, returning {part_id: (frontmatter, body)}."""
-    out: dict[str, tuple[dict[str, str], str]] = {}
+def normalize_skill_metadata(
+    meta: dict,
+    part_id: str,
+    normalize: bool,
+) -> tuple[dict, bool]:
+    """Normalize SKILL.md frontmatter against canonical conventions.
+
+    Always enforces `meta['name'] = aosp-part-<part_id>` regardless of
+    `normalize`, so the source slug, generated skill directory, and
+    frontmatter never drift apart.
+
+    When `normalize` is True (normal build):
+      * fills in `metadata.author = DEFAULT_AUTHOR` (utzcoz) if missing;
+      * bumps `metadata.last-updated` to today's date.
+
+    When `normalize` is False (--check), metadata is passed through
+    verbatim so verification stays deterministic across days.
+
+    Returns (new_meta, changed) where `changed` is True if any field was
+    added or modified relative to the input.
+    """
+    new_meta = dict(meta)
+    changed = False
+    expected_name = claude_skill_slug(part_id)
+    if new_meta.get("name") != expected_name:
+        new_meta["name"] = expected_name
+        changed = True
+    if normalize:
+        md = dict(meta.get("metadata") or {})
+        if not md.get("author"):
+            md["author"] = DEFAULT_AUTHOR
+            changed = True
+        today = today_iso()
+        if md.get("last-updated") != today:
+            md["last-updated"] = today
+            changed = True
+        new_meta["metadata"] = md
+    else:
+        new_meta["metadata"] = meta.get("metadata") or {}
+    return new_meta, changed
+
+
+def load_part_skills(
+    manifest: Manifest,
+    normalize: bool = True,
+) -> dict[str, tuple[dict, str]]:
+    """Load every Part's SKILL.md, returning {part_id: (frontmatter, body)}.
+
+    When normalize is True (normal build), the source SKILL.md is
+    rewritten in place with the canonical `name:` field, the default
+    author, and today's `last-updated` whenever any of those differ from
+    what's on disk. When normalize is False (--check), source files are
+    read but never modified.
+    """
+    out: dict[str, tuple[dict, str]] = {}
     for part in manifest.parts:
         path = part_skill_path(part.id)
         if not path.is_file():
             raise FileNotFoundError(f"Missing SKILL.md for part {part.id}: {path}")
-        out[part.id] = parse_skill(path.read_text(encoding="utf-8"))
+        original = path.read_text(encoding="utf-8")
+        meta, body = parse_skill(original)
+        meta, changed = normalize_skill_metadata(meta, part.id, normalize=normalize)
+        if normalize and changed:
+            path.write_text(serialize_skill(meta, body), encoding="utf-8")
+        out[part.id] = (meta, body)
     return out
 
 
@@ -196,15 +326,7 @@ def generate_claude(
         d = skills_root / slug
         d.mkdir()
         meta, body = skills[part.id]
-        skill_md = (
-            "---\n"
-            f"name: {meta['name']}\n"
-            "description: |\n"
-            + "".join(f"  {line}\n" for line in meta["description"].split("\n"))
-            + "---\n\n"
-            + body
-        )
-        (d / "SKILL.md").write_text(skill_md, encoding="utf-8")
+        (d / "SKILL.md").write_text(serialize_skill(meta, body), encoding="utf-8")
         for chapter in part.chapters:
             shutil.copyfile(chapter_path(chapter), d / f"{chapter}.md")
 
@@ -308,7 +430,7 @@ def generate_copilot(
         f"# {manifest.description}\n\n",
         f"> AOSP Internals Copilot bundle, packaged version {manifest.version}.\n",
         f"> Source: {manifest.repo_url}\n\n",
-        "Per-Part background lives in `.github/instructions/aosp-part-<NN>-<slug>.instructions.md`. ",
+        "Per-Part background lives in `.github/instructions/aosp-part-<slug>.instructions.md`. ",
         "Copilot loads each one based on its `applyTo` glob; the descriptions "
         "in those files mark which AOSP subsystem they cover.\n\n",
         "When asked about an AOSP subsystem, consult the Part whose description "
@@ -389,7 +511,13 @@ def main(argv: list[str] | None = None) -> int:
 
     manifest = load_manifest()
     validate_chapters(manifest)
-    skills = load_part_skills(manifest)
+    # In --check mode the script is read-only against source SKILL.md files
+    # and metadata is passed through verbatim (so the check stays
+    # deterministic across days). In a normal build, source `name:` fields
+    # are forced into sync with the manifest Part id (`aosp-part-<id>`),
+    # `metadata.author` defaults to utzcoz if missing, and
+    # `metadata.last-updated` is bumped to today.
+    skills = load_part_skills(manifest, normalize=not args.check)
 
     if args.check:
         with tempfile.TemporaryDirectory() as td:
